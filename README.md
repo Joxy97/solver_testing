@@ -2,8 +2,8 @@
 
 A small collection of Python scripts for creating reproducible QUBO problem instances.
 Generated problems are saved as ordinary JSON files and can be solved through four simple
-solver adapters. Result analysis beyond verified energies and run metadata remains a future
-layer.
+solver adapters. A resumable relative-benchmark runner compares solver energies, rankings,
+solution distances, and runtimes across a problem set.
 
 ## Install
 
@@ -100,6 +100,22 @@ to `cuda` or `auto`.
 
 See [`SOLVERS.md`](SOLVERS.md) for each solver's limitations, complete parameter list,
 GPU instructions, suggested sweeps, configuration format, and saved-result layout.
+
+## Four-solver relative benchmark
+
+Compare SciPy + HiGHS, Ocean SA, and Simulated Bifurcation on CPU and CUDA without using
+Exact Enumeration:
+
+```bash
+python benchmark_4_solvers.py generated_problems \
+  --config configs/relative_4_solver_benchmark.yaml \
+  --output BenchmarkResults/relative_4_solver
+```
+
+The runner saves progress after every solver attempt, resumes safely, writes a comparison
+report for every QUBO, and produces complete-case averages over instances. See
+[`docs/RELATIVE_BENCHMARK.md`](docs/RELATIVE_BENCHMARK.md) for setup, metrics, and output
+details.
 
 ## Available problem families
 

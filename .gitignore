@@ -1,6 +1,3 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-generated_problems/
-Solutions/
-analysis
