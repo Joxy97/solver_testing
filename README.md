@@ -80,6 +80,12 @@ Run one saved problem:
 python solve.py --problem path/to/problem.json --solver exact
 ```
 
+Add equally spaced best-solution checkpoints with `num_snapshots` (zero is the default):
+
+```bash
+python solve.py --problem path/to/problem.json --solver ocean_sa --set num_snapshots=5
+```
+
 Or run the prepared configuration, which selects one small Random QUBO and applies all four
 solvers:
 

@@ -79,16 +79,35 @@ def solve_problem(
             f"gave {recomputed} (difference {difference})."
         )
 
+    snapshots = _normalize_snapshots(
+        backend.get("snapshots", []),
+        problem["qubo"],
+        expected_count=normalized.get("num_snapshots", 0),
+    )
+    if snapshots:
+        final_snapshot = snapshots[-1]
+        if final_snapshot["solution"] is None:
+            raise RuntimeError("The final solver snapshot does not contain an incumbent")
+        snapshot_solution = final_snapshot["solution"]
+        if snapshot_solution["sample"] != sample or not math.isclose(
+            snapshot_solution["energy"], recomputed, rel_tol=1e-9, abs_tol=1e-9
+        ):
+            raise RuntimeError("The final solver snapshot does not match the final solution")
+
+    identity_parameters = dict(normalized)
+    # Preserve run IDs produced before snapshot support when snapshots are disabled.
+    if identity_parameters.get("num_snapshots") == 0:
+        identity_parameters.pop("num_snapshots")
     identity = {
         "instance_id": problem["instance_id"],
         "solver_type": solver_type,
-        "parameters": normalized,
+        "parameters": identity_parameters,
     }
     digest = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:16]
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": f"{solver_type}-{digest}",
         "problem": {
             "instance_id": problem["instance_id"],
@@ -117,6 +136,7 @@ def solve_problem(
             "absolute_energy_difference": difference,
             "passed": True,
         },
+        "snapshots": snapshots,
         "solver_metrics": backend.get("metrics", {}),
     }
     return _json_safe(result)
@@ -167,6 +187,7 @@ def _update_manifest(result: dict, result_path: Path, root: Path) -> None:
         "status": result["status"],
         "energy": result["solution"]["energy"],
         "wall_seconds": result["timing"]["wall_seconds"],
+        "snapshots": len(result.get("snapshots", [])),
         "file": str(relative_path),
     }
     by_key = {
@@ -192,6 +213,106 @@ def _module(solver_type: str):
     except KeyError as error:
         available = ", ".join(SOLVERS)
         raise ValueError(f"Unknown solver '{solver_type}'. Available: {available}") from error
+
+
+def _normalize_snapshots(snapshots, qubo: dict, expected_count: int) -> list[dict]:
+    if not isinstance(snapshots, list):
+        raise RuntimeError("Solver snapshots must be returned as a list")
+    if len(snapshots) != expected_count:
+        raise RuntimeError(
+            f"Solver returned {len(snapshots)} snapshots; expected {expected_count}"
+        )
+
+    normalized = []
+    previous_progress = 0.0
+    for expected_index, snapshot in enumerate(snapshots, start=1):
+        if not isinstance(snapshot, dict):
+            raise RuntimeError("Every solver snapshot must be a mapping")
+        if snapshot.get("index") != expected_index:
+            raise RuntimeError("Solver snapshot indices must be consecutive and one-based")
+
+        progress = snapshot.get("progress_fraction")
+        if not isinstance(progress, (int, float)) or isinstance(progress, bool):
+            raise RuntimeError("Snapshot progress_fraction must be numeric")
+        progress = float(progress)
+        expected_progress = expected_index / expected_count
+        if not math.isfinite(progress) or not math.isclose(
+            progress, expected_progress, rel_tol=1e-12, abs_tol=1e-12
+        ):
+            raise RuntimeError("Solver snapshots must be equally spaced through progress 1.0")
+        if progress <= previous_progress:
+            raise RuntimeError("Solver snapshot progress must be strictly increasing")
+        previous_progress = progress
+
+        target = snapshot.get("target")
+        if not isinstance(target, dict):
+            raise RuntimeError("Every solver snapshot must describe its work target")
+        unit = target.get("unit")
+        value = target.get("value")
+        total = target.get("total")
+        if not isinstance(unit, str) or not unit:
+            raise RuntimeError("Snapshot target unit must be a non-empty string")
+        for name, number in (("value", value), ("total", total)):
+            if (
+                not isinstance(number, (int, float))
+                or isinstance(number, bool)
+                or not math.isfinite(float(number))
+                or number < 0
+            ):
+                raise RuntimeError(f"Snapshot target {name} must be a finite non-negative number")
+        if value > total:
+            raise RuntimeError("Snapshot target value cannot exceed its total")
+
+        elapsed = snapshot.get("elapsed_seconds")
+        if elapsed is not None and (
+            not isinstance(elapsed, (int, float))
+            or isinstance(elapsed, bool)
+            or not math.isfinite(float(elapsed))
+            or elapsed < 0
+        ):
+            raise RuntimeError("Snapshot elapsed_seconds must be finite and non-negative")
+
+        output = {
+            "index": expected_index,
+            "progress_fraction": progress,
+            "target": {"unit": unit, "value": value, "total": total},
+            "elapsed_seconds": float(elapsed) if elapsed is not None else None,
+            "solution": None,
+            "verification": None,
+            "solver_metrics": snapshot.get("metrics", {}),
+        }
+        snapshot_sample = snapshot.get("sample")
+        reported_energy = snapshot.get("reported_energy")
+        if snapshot_sample is not None:
+            values = [int(item) for item in snapshot_sample]
+            if len(values) != int(qubo["num_variables"]):
+                raise RuntimeError(
+                    f"Snapshot {expected_index} returned {len(values)} values for a "
+                    f"{qubo['num_variables']}-variable QUBO"
+                )
+            if any(item not in (0, 1) for item in values):
+                raise RuntimeError(f"Snapshot {expected_index} returned a non-binary sample")
+            recomputed = qubo_energy(qubo, values)
+            reported = float(reported_energy)
+            difference = abs(recomputed - reported)
+            tolerance = 1e-5 * max(1.0, abs(recomputed), abs(reported))
+            if not math.isfinite(reported) or difference > tolerance:
+                raise RuntimeError(
+                    f"Snapshot {expected_index} reported energy {reported}, but independent "
+                    f"QUBO evaluation gave {recomputed}"
+                )
+            output["solution"] = {"sample": values, "energy": recomputed}
+            output["verification"] = {
+                "binary_sample": True,
+                "reported_energy": reported,
+                "recomputed_energy": recomputed,
+                "absolute_energy_difference": difference,
+                "passed": True,
+            }
+        elif reported_energy is not None:
+            raise RuntimeError("A snapshot without a sample cannot report an energy")
+        normalized.append(output)
+    return normalized
 
 
 def _validate_parameters(schema: dict, supplied: dict) -> dict:

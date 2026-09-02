@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 
-from .common import SolverCapabilityError, package_version, require_package
+from .common import (
+    SolverCapabilityError,
+    equally_spaced_targets,
+    package_version,
+    require_package,
+    snapshot_record,
+)
 
 
 NAME = "Simulated Bifurcation"
@@ -84,6 +92,12 @@ PARAMETERS = {
         "min": 1,
         "description": "Safety limit for the solver's dense n-by-n matrix allocation",
     },
+    "num_snapshots": {
+        "type": "integer",
+        "default": 0,
+        "min": 0,
+        "description": "Equally spaced best-solution step checkpoints; zero disables snapshots",
+    },
 }
 
 
@@ -92,6 +106,7 @@ def version() -> str:
 
 
 def solve(qubo: dict, parameters: dict) -> dict:
+    started = time.perf_counter()
     require_package("torch", "torch", NAME)
     require_package(
         "simulated_bifurcation", "simulated-bifurcation", NAME
@@ -136,32 +151,67 @@ def solve(qubo: dict, parameters: dict) -> dict:
         matrix[int(first), int(second)] += half
         matrix[int(second), int(first)] += half
 
-    torch.manual_seed(parameters["seed"])
-    if device.startswith("cuda"):
-        torch.cuda.manual_seed_all(parameters["seed"])
     matrix_tensor = torch.as_tensor(matrix, dtype=torch_dtype, device=device)
     linear_tensor = torch.as_tensor(linear, dtype=torch_dtype, device=device)
-    vector, evaluation = sb.minimize(
-        matrix_tensor,
-        linear_tensor,
-        float(qubo.get("offset", 0.0)),
-        domain="binary",
-        dtype=torch_dtype,
-        device=device,
-        agents=parameters["agents"],
-        max_steps=parameters["max_steps"],
-        best_only=True,
-        mode=parameters["mode"],
-        heated=parameters["heated"],
-        verbose=False,
-        early_stopping=parameters["early_stopping"],
-        sampling_period=parameters["sampling_period"],
-        convergence_threshold=parameters["convergence_threshold"],
-        timeout=parameters["timeout"],
+
+    num_snapshots = parameters["num_snapshots"]
+    snapshot_targets = equally_spaced_targets(
+        parameters["max_steps"], num_snapshots
     )
-    sample = (
-        vector.detach().to(device="cpu").round().to(dtype=torch.int8).reshape(-1).tolist()
-    )
+    run_targets = snapshot_targets or [parameters["max_steps"]]
+    snapshots = []
+    vector = evaluation = None
+    sample = None
+    for index, step_limit in enumerate(run_targets, start=1):
+        torch.manual_seed(parameters["seed"])
+        if device.startswith("cuda"):
+            torch.cuda.manual_seed_all(parameters["seed"])
+        checkpoint_timeout = parameters["timeout"]
+        if num_snapshots and checkpoint_timeout is not None:
+            checkpoint_timeout *= step_limit / parameters["max_steps"]
+        vector, evaluation = sb.minimize(
+            matrix_tensor,
+            linear_tensor,
+            float(qubo.get("offset", 0.0)),
+            domain="binary",
+            dtype=torch_dtype,
+            device=device,
+            agents=parameters["agents"],
+            max_steps=step_limit,
+            best_only=True,
+            mode=parameters["mode"],
+            heated=parameters["heated"],
+            verbose=False,
+            early_stopping=parameters["early_stopping"],
+            sampling_period=parameters["sampling_period"],
+            convergence_threshold=parameters["convergence_threshold"],
+            timeout=checkpoint_timeout,
+        )
+        sample = (
+            vector.detach()
+            .to(device="cpu")
+            .round()
+            .to(dtype=torch.int8)
+            .reshape(-1)
+            .tolist()
+        )
+        if num_snapshots:
+            snapshots.append(
+                snapshot_record(
+                    index=index,
+                    count=num_snapshots,
+                    unit="evolution_steps",
+                    target=step_limit,
+                    total=parameters["max_steps"],
+                    sample=sample,
+                    reported_energy=float(evaluation.detach().cpu().item()),
+                    elapsed_seconds=time.perf_counter() - started,
+                    metrics={
+                        "step_limit": step_limit,
+                        "timeout_limit": checkpoint_timeout,
+                    },
+                )
+            )
     device_name = "cpu"
     if device.startswith("cuda"):
         device_name = f"{device} ({torch.cuda.get_device_name(torch.device(device))})"
@@ -177,4 +227,5 @@ def solve(qubo: dict, parameters: dict) -> dict:
             "dense_matrix_mib": matrix.nbytes / 1024**2,
             "optimality_proven": False,
         },
+        "snapshots": snapshots,
     }

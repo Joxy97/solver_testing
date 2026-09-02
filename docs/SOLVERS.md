@@ -29,6 +29,34 @@ three constraints per stored quadratic interaction. Simulated bifurcation constr
 dense \(n \times n\) matrix even when the saved QUBO is sparse. These three facts are more
 important than variable count alone when selecting a solver.
 
+## Progress snapshots
+
+Every solver accepts `num_snapshots`, an integer that defaults to `0`. A positive value
+stores that many best-incumbent checkpoints at equal fractions of the solver's natural
+work budget. The final checkpoint is always at progress `1.0` and matches the returned
+solution. Each available checkpoint contains its binary sample, independently recomputed
+energy, verification details, work target, and (when measurable) elapsed wall time.
+
+The progress unit depends on the solver:
+
+| Solver | Snapshot progress unit | Collection method |
+|---|---|---|
+| Exact Enumeration | Enumerated states | Captured during one enumeration |
+| SciPy + HiGHS | Time limit, or node limit when time is unlimited | Buffered live-incumbent callbacks during one solve |
+| Ocean SA | Completed reads | Reconstructed from one sampler response |
+| Simulated Bifurcation | Evolution-step limit | Deterministic checkpoint replays |
+
+Discrete work budgets round checkpoint targets upward. Consequently, `num_snapshots`
+cannot exceed the number of states, reads, or evolution steps available to the relevant
+solver. HiGHS can return a checkpoint with `solution: null` when it has not found an
+incumbent by that point.
+
+SciPy's public `milp` interface does not expose live incumbents, so the SciPy + HiGHS
+adapter passes the SciPy sparse model to the native `highspy` interface. Callback data is
+buffered in memory and written only after the single solve finishes. Simulated-bifurcation
+still uses deterministic checkpoint replays because its public optimizer interface does
+not expose live state.
+
 ## Exact Enumeration (`exact`)
 
 ### What it does
@@ -47,6 +75,7 @@ would introduce a second algorithmic baseline.
 |---|---:|---:|---|
 | `max_variables` | integer | `24` | Refuses instances above this size before attempting \(2^n\) evaluations. Raising it does not make the method more scalable. |
 | `batch_size` | integer | `65536` | Number of assignments represented and evaluated together. Higher values generally improve throughput but require more memory. |
+| `num_snapshots` | integer | `0` | Number of equally spaced best-so-far state checkpoints. Zero disables snapshots. It cannot exceed (2^n). |
 
 ### Suggested sweeps
 
@@ -67,7 +96,7 @@ safety gate rather than an experimental hyperparameter.
 
 ### What it does
 
-SciPy's `milp` function calls the bundled HiGHS mixed-integer solver. The adapter replaces
+The adapter uses SciPy sparse matrices and the native HiGHS Python interface. It replaces
 every product \(x_i x_j\) with an auxiliary variable \(y_{ij}\) and the exact constraints
 
 ```text
@@ -95,6 +124,7 @@ HiGHS is CPU-only in this interface.
 | `display` | boolean | `false` | Prints the HiGHS progress log to the terminal. It does not change the mathematical model. |
 | `max_quadratic_terms` | integer | `25000` | Rejects a QUBO before creating more than this many auxiliary product variables. |
 | `max_linearized_variables` | integer | `100000` | Rejects a model when original variables plus product variables exceed this safety limit. |
+| `num_snapshots` | integer | `0` | Number of equally spaced incumbent checkpoints. Uses `time_limit` when positive, otherwise a positive `node_limit`; zero disables snapshots. |
 
 ### Suggested sweeps
 
@@ -140,6 +170,7 @@ is saved. See the [Ocean sampler documentation](https://docs.dwavequantum.com/en
 | `proposal_acceptance_criteria` | choice | `Metropolis` | Selects `Metropolis` or `Gibbs` acceptance probabilities for proposed flips. |
 | `seed` | integer | `0` | Seeds Ocean's pseudo-random generator. Repeated seeds allow reproducible local runs. |
 | `max_variable_updates` | integer | `100000000` | Safety gate on `num_variables * num_reads * num_sweeps`. Raise it deliberately when a larger CPU run is intended. |
+| `num_snapshots` | integer | `0` | Number of equally spaced best-so-far read checkpoints. Zero disables snapshots; it cannot exceed `num_reads`. |
 
 ### Suggested sweeps
 
@@ -195,6 +226,7 @@ the CPU.
 | `device` | string | `cpu` | `cpu`, `auto`, `cuda`, or an indexed device such as `cuda:0`. `auto` selects CUDA when PyTorch reports it available. |
 | `seed` | integer | `0` | Seeds PyTorch's randomized agent initialization. CPU and GPU runs are not guaranteed to match. |
 | `max_variables` | integer | `5000` | Refuses larger instances before allocating the dense matrix. This is a safety gate, not a claim that every 5,000-variable run is practical. |
+| `num_snapshots` | integer | `0` | Number of equally spaced best-solution step checkpoints. Zero disables snapshots; it cannot exceed `max_steps`. |
 
 To use CUDA, install the PyTorch build appropriate for the machine and set:
 
@@ -232,6 +264,7 @@ python solve.py \
   --solver ocean_sa \
   --set num_reads=100 \
   --set num_sweeps=1000 \
+  --set num_snapshots=5 \
   --set seed=42
 ```
 
@@ -287,4 +320,5 @@ solver_results/
 
 Each JSON result records the problem ID and source, normalized parameters, package version,
 device, status, binary sample, independently recomputed energy, wall time, verification
-details, and solver-specific metrics. `manifest.csv` provides one compact row per run.
+details, progress snapshots, and solver-specific metrics. `manifest.csv` provides one
+compact row per run and records the number of snapshots saved.

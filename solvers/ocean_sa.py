@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from .common import SolverCapabilityError, package_version, require_package
+from .common import (
+    SolverCapabilityError,
+    equally_spaced_targets,
+    package_version,
+    require_package,
+    snapshot_record,
+)
 
 
 NAME = "D-Wave Ocean Simulated Annealing"
@@ -74,6 +80,12 @@ PARAMETERS = {
         "min": 1,
         "description": "Safety limit on num_variables times num_reads times num_sweeps",
     },
+    "num_snapshots": {
+        "type": "integer",
+        "default": 0,
+        "min": 0,
+        "description": "Equally spaced best-so-far read checkpoints; zero disables snapshots",
+    },
 }
 
 
@@ -94,6 +106,9 @@ def solve(qubo: dict, parameters: dict) -> dict:
         raise ValueError("beta_min must be smaller than beta_max")
 
     num_variables = int(qubo["num_variables"])
+    snapshot_targets = equally_spaced_targets(
+        parameters["num_reads"], parameters["num_snapshots"]
+    )
     planned_updates = (
         num_variables * parameters["num_reads"] * parameters["num_sweeps"]
     )
@@ -133,6 +148,52 @@ def solve(qubo: dict, parameters: dict) -> dict:
     best = sampleset.first
     sample = [int(best.sample[variable]) for variable in range(num_variables)]
 
+    snapshots = []
+    if snapshot_targets:
+        variable_positions = {
+            variable: position for position, variable in enumerate(sampleset.variables)
+        }
+        best_position = None
+        best_energy = float("inf")
+        reads_seen = 0
+        target_index = 0
+        for position, row in enumerate(sampleset.record):
+            occurrences = int(row.num_occurrences)
+            for _ in range(occurrences):
+                reads_seen += 1
+                energy = float(row.energy)
+                if energy < best_energy:
+                    best_energy = energy
+                    best_position = position
+                if reads_seen == snapshot_targets[target_index]:
+                    best_row = sampleset.record.sample[best_position]
+                    checkpoint_sample = [
+                        int(best_row[variable_positions[variable]])
+                        for variable in range(num_variables)
+                    ]
+                    snapshots.append(
+                        snapshot_record(
+                            index=target_index + 1,
+                            count=len(snapshot_targets),
+                            unit="reads",
+                            target=reads_seen,
+                            total=parameters["num_reads"],
+                            sample=checkpoint_sample,
+                            reported_energy=best_energy,
+                            metrics={"reads_completed": reads_seen},
+                        )
+                    )
+                    target_index += 1
+                    if target_index == len(snapshot_targets):
+                        break
+            if target_index == len(snapshot_targets):
+                break
+        if target_index != len(snapshot_targets):
+            raise RuntimeError(
+                f"Ocean returned {reads_seen} reads, fewer than the final snapshot target "
+                f"of {snapshot_targets[-1]}"
+            )
+
     return {
         "status": "completed",
         "sample": sample,
@@ -145,4 +206,5 @@ def solve(qubo: dict, parameters: dict) -> dict:
             "sampler_info": sampleset.info,
             "optimality_proven": False,
         },
+        "snapshots": snapshots,
     }

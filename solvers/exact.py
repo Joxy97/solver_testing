@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 
-from .common import SolverCapabilityError
+from .common import SolverCapabilityError, equally_spaced_targets, snapshot_record
 
 
 NAME = "Exact Enumeration"
@@ -27,6 +29,12 @@ PARAMETERS = {
         "min": 1,
         "description": "Assignments evaluated together; larger batches trade memory for speed",
     },
+    "num_snapshots": {
+        "type": "integer",
+        "default": 0,
+        "min": 0,
+        "description": "Equally spaced best-so-far checkpoints; zero disables snapshots",
+    },
 }
 
 
@@ -35,6 +43,7 @@ def version() -> str:
 
 
 def solve(qubo: dict, parameters: dict) -> dict:
+    started = time.perf_counter()
     num_variables = int(qubo["num_variables"])
     if num_variables > parameters["max_variables"]:
         raise SolverCapabilityError(
@@ -61,14 +70,22 @@ def solve(qubo: dict, parameters: dict) -> dict:
         quadratic = np.empty(0, dtype=np.float64)
 
     total_states = 1 << num_variables
+    snapshot_targets = equally_spaced_targets(
+        total_states, parameters["num_snapshots"]
+    )
+    next_snapshot = 0
+    snapshots = []
     batch_size = min(parameters["batch_size"], total_states)
     bit_positions = np.arange(num_variables, dtype=np.uint64)
     best_energy = float("inf")
     best_index = 0
     best_count = 0
 
-    for start in range(0, total_states, batch_size):
+    start = 0
+    while start < total_states:
         stop = min(start + batch_size, total_states)
+        if next_snapshot < len(snapshot_targets):
+            stop = min(stop, snapshot_targets[next_snapshot])
         indices = np.arange(start, stop, dtype=np.uint64)
         samples = ((indices[:, None] >> bit_positions) & 1).astype(np.uint8)
         energies = samples @ linear
@@ -91,6 +108,26 @@ def solve(qubo: dict, parameters: dict) -> dict:
         elif local_energy == best_energy:
             best_count += int(np.count_nonzero(energies == best_energy))
 
+        if next_snapshot < len(snapshot_targets) and stop == snapshot_targets[next_snapshot]:
+            checkpoint_sample = [
+                int((best_index >> variable) & 1) for variable in range(num_variables)
+            ]
+            snapshots.append(
+                snapshot_record(
+                    index=next_snapshot + 1,
+                    count=len(snapshot_targets),
+                    unit="states",
+                    target=stop,
+                    total=total_states,
+                    sample=checkpoint_sample,
+                    reported_energy=best_energy + float(qubo.get("offset", 0.0)),
+                    elapsed_seconds=time.perf_counter() - started,
+                    metrics={"states_evaluated": stop},
+                )
+            )
+            next_snapshot += 1
+        start = stop
+
     sample = [int((best_index >> variable) & 1) for variable in range(num_variables)]
     best_energy += float(qubo.get("offset", 0.0))
     return {
@@ -103,4 +140,5 @@ def solve(qubo: dict, parameters: dict) -> dict:
             "optimal_assignments_found": best_count,
             "optimality_proven": True,
         },
+        "snapshots": snapshots,
     }
