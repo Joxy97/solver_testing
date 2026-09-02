@@ -1,0 +1,6 @@
+numpy>=2.0
+networkx>=3.2
+PyYAML>=6.0
+scipy>=1.11
+dwave-ocean-sdk>=9.0,<10.0
+simulated-bifurcation>=2.0,<3.0

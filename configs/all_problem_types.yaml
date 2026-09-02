@@ -1,0 +1,59 @@
+# One small example of every available problem family.
+output_folder: ../generated_problems
+base_seed: 100
+
+# All valid instances are retained. Their warnings and realized statistics are written to
+# each JSON file and to generated_problems/manifest.csv.
+validation:
+  max_attempts: 1
+  reject_warnings: []
+
+problems:
+  - type: max_cut
+    parameters:
+      num_vertices: 12
+
+  - type: independent_set
+    parameters:
+      num_vertices: 12
+
+  - type: maximum_clique
+    parameters:
+      num_vertices: 12
+
+  - type: graph_coloring
+    parameters:
+      num_vertices: 10
+      num_colors: 3
+
+  - type: number_partitioning
+    parameters:
+      num_numbers: 12
+      max_value: 50
+
+  - type: quadratic_knapsack
+    parameters:
+      num_items: 10
+      quadratic_density: 0.2
+
+  - type: set_packing
+    parameters:
+      universe_size: 12
+      num_sets: 16
+
+  - type: max_sat
+    parameters:
+      num_variables: 10
+      num_clauses: 30
+      clause_size: 3
+
+  - type: spin_glass
+    parameters:
+      num_vertices: 12
+      graph_type: random_regular
+      degree: 3
+
+  - type: random_qubo
+    parameters:
+      num_variables: 12
+      quadratic_density: 0.3

@@ -1,0 +1,32 @@
+# Benchmark every persisted 100-variable, fully dense Random QUBO instance.
+output_folder: ../solver_results/random_qubo_n100_full_density
+
+problem_files:
+  - ../generated_problems/random_qubo/core/n_0100/density_1p00/**/*.json
+continue_on_error: true
+
+solvers:
+  # This deliberately exercises the safety check: 2^100 states are not enumerable.
+  - type: exact
+    parameters:
+      max_variables: 24
+
+  - type: scipy_highs
+    parameters:
+      time_limit: 60
+      mip_rel_gap: 0
+      presolve: true
+
+  - type: ocean_sa
+    parameters:
+      num_reads: 100
+      num_sweeps: 1000
+      seed: 42
+
+  - type: simulated_bifurcation
+    parameters:
+      agents: 128
+      max_steps: 10000
+      timeout: 60
+      device: cuda
+      seed: 42

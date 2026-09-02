@@ -1,0 +1,23 @@
+# Generate three reproducible weighted Max-Cut instances.
+output_folder: ../generated_problems
+base_seed: 42
+
+# These rules are declared before generation so the saved collection contains connected
+# Max-Cut graphs without isolated vertices. Warnings not listed here remain informational.
+validation:
+  max_attempts: 20
+  reject_warnings:
+    - empty_graph
+    - disconnected_graph
+    - isolated_vertices
+
+problems:
+  - type: max_cut
+    count: 3
+    parameters:
+      num_vertices: 30
+      graph_type: erdos_renyi
+      edge_probability: 0.2
+      weighted: true
+      min_edge_weight: 1
+      max_edge_weight: 5

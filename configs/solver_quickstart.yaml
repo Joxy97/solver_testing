@@ -1,0 +1,31 @@
+# Run all four solvers on one of the smallest persisted Random QUBO instances.
+output_folder: ../solver_results
+
+problem_files:
+  - ../generated_problems/random_qubo/core/n_0020/density_0p01/integer/*.json
+problem_limit: 1
+continue_on_error: false
+
+solvers:
+  - type: exact
+    parameters:
+      max_variables: 24
+      batch_size: 65536
+
+  - type: scipy_highs
+    parameters:
+      time_limit: 60
+      mip_rel_gap: 0
+
+  - type: ocean_sa
+    parameters:
+      num_reads: 100
+      num_sweeps: 1000
+      seed: 42
+
+  - type: simulated_bifurcation
+    parameters:
+      agents: 128
+      max_steps: 10000
+      device: cpu  # Change to cuda or auto to use a CUDA GPU when available.
+      seed: 42
