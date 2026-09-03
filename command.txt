@@ -1,3 +1,0 @@
-python benchmark_4_solvers.py generated_problems \
-  --config configs/relative_4_solver_benchmark.yaml \
-  --output BenchmarkResults/relative_4_solver

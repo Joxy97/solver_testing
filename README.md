@@ -1,200 +1,82 @@
-# QUBO Problem Generator and Solver Benchmarks
+# QUBO Experiment Toolkit
 
-A small collection of Python scripts for creating reproducible QUBO problem instances.
-Generated problems are saved as ordinary JSON files and can be solved through five simple
-solver adapters. A resumable six-configuration benchmark runner compares solver energies,
-rankings, solution distances, and runtimes across a problem set.
+This project generates reproducible QUBO instances and solves them with CPU and GPU
+solvers. Experiments use editable YAML files, so no Python changes are needed.
 
-## Install
+## Start here
 
-Python 3.10 or newer is recommended.
+Python 3.10 or newer is recommended. From a fresh clone:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-## Easiest use
-
-Start the guided generator and answer the displayed questions:
+For NVIDIA GPUs, verify `nvidia-smi` works. Then confirm PyTorch sees CUDA:
 
 ```bash
-python generate.py
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"
 ```
 
-Press Enter at a question to use its displayed default.
+If it does not, install the appropriate CUDA-enabled PyTorch wheel from the official
+PyTorch installation selector.
 
-To generate a prepared configuration:
+## Run a Random QUBO experiment
+
+1. Edit `configs/random_qubo.yaml` to choose the problem parameters, count, and seed.
+2. Edit `configs/solve_random_qubo.yaml` to choose solvers, parameters, and devices.
+3. Run:
 
 ```bash
-python generate.py configs/quickstart.yaml
+python generate.py configs/random_qubo.yaml
+python solve.py configs/solve_random_qubo.yaml
 ```
 
-To list or inspect available generators:
+Inputs go to `generated_problems/random_qubo/`; results go to
+`BenchmarkResults/random_qubo/`. Both are ignored by Git, so old results are preserved.
+
+To expose only physical GPUs 2 and 5 (renumbered inside the process to `cuda:0` and
+`cuda:1`):
+
+```bash
+export CUDA_VISIBLE_DEVICES=2,5
+python solve.py configs/solve_random_qubo.yaml
+```
+
+The standard runner is sequential. For concurrent multi-GPU runs, use one config and
+output folder per process. See [the complete remote workflow](docs/RANDOM_QUBO_WORKFLOW.md)
+for precise preparation, parameter selection, parallel execution, and result retrieval.
+
+## Discover available options
 
 ```bash
 python generate.py --list
-python generate.py --describe max_cut
-```
-
-One problem can also be generated directly:
-
-```bash
-python generate.py --problem number_partitioning --set num_numbers=25 --count 3 --seed 42
-```
-
-## Configuration files
-
-```yaml
-output_folder: generated_problems
-base_seed: 42
-
-problems:
-  - type: max_cut
-    count: 3
-    parameters:
-      num_vertices: 30
-      edge_probability: 0.2
-      weighted: true
-```
-
-Any omitted parameter uses the default shown by `--describe`. Each instance receives a
-different seed. The same problem type, parameters, and seed always produce the same JSON
-content and instance ID.
-
-See `configs/all_problem_types.yaml` for a small example of every generator.
-See [`PROBLEMS.md`](PROBLEMS.md) for explanations, complete parameter lists, and suggested
-benchmark sweeps for every problem family.
-
-## Solving generated problems
-
-List or inspect the available solvers:
-
-```bash
+python generate.py --describe random_qubo
 python solve.py --list
-python solve.py --describe ocean_sa
-python solve.py --describe transverse_route
+python solve.py --describe simulated_bifurcation
 ```
 
-Run one saved problem:
+Interactive guided modes are also available with `python generate.py` and
+`python solve.py`.
 
-```bash
-python solve.py --problem path/to/problem.json --solver exact
-```
+Reference documentation:
 
-Add equally spaced best-solution checkpoints with `num_snapshots` (zero is the default):
+- [Problem generators](docs/PROBLEMS.md)
+- [Solver parameters and limitations](docs/SOLVERS.md)
+- [Validation](docs/VALIDATION.md)
+- [Adding a solver](docs/new_solver.md)
 
-```bash
-python solve.py --problem path/to/problem.json --solver ocean_sa --set num_snapshots=5
-```
-
-Or run the prepared configuration, which selects one small Random QUBO and applies its
-configured solvers:
-
-```bash
-python solve.py configs/solver_quickstart.yaml
-```
-
-Running `python solve.py` with no arguments starts a guided mode. Available backends are
-Exact Enumeration, SciPy + HiGHS MILP, D-Wave Ocean Simulated Annealing, Simulated
-Bifurcation, and Transverse-Route Geometric Flow. The last two support GPU execution;
-set their `device` parameter to `cuda` or `auto`.
-
-See [`SOLVERS.md`](SOLVERS.md) for each solver's limitations, complete parameter list,
-GPU instructions, suggested sweeps, configuration format, and saved-result layout.
-
-## Six-configuration relative benchmark
-
-Compare SciPy + HiGHS, Ocean SA, Simulated Bifurcation on CPU and CUDA, and
-Transverse-Route Flow on CPU and CUDA without using Exact Enumeration:
-
-```bash
-python benchmark_6_solvers.py generated_problems \
-  --config configs/relative_6_solver_benchmark.yaml \
-  --output BenchmarkResults/relative_6_solver
-```
-
-The runner saves progress after every solver attempt, resumes safely, writes a comparison
-report for every QUBO, and produces complete-case averages over instances. See
-[`docs/RELATIVE_BENCHMARK.md`](docs/RELATIVE_BENCHMARK.md) for setup, metrics, and output
-details.
-
-## 100k-variable benchmark on eight GPUs
-
-Prepare a compact seed-defined Random QUBO with 100,000 variables and density `0.25`, then
-benchmark Simulated Bifurcation against Transverse-Route Flow across eight CUDA devices:
-
-```bash
-python benchmark_100k_8gpu.py
-```
-
-The problem is materialized directly on each GPU because an explicit sparse JSON file
-would contain roughly 1.25 billion quadratic terms. See
-[`docs/LARGE_8GPU_BENCHMARK.md`](docs/LARGE_8GPU_BENCHMARK.md) for the fresh-clone command,
-memory requirements, sharding semantics, resume behavior, and dashboard import command.
-
-## Available problem families
-
-- Maximum Cut
-- Maximum Independent Set
-- Maximum Clique
-- Graph Coloring
-- Number Partitioning
-- Quadratic Knapsack
-- Set Packing
-- SAT / Max-SAT (2-SAT or quadratized 3-SAT)
-- Spin Glass
-- Random QUBO
-
-Each generator lives in one readable file under `problems/`. Its `PARAMETERS` dictionary
-controls what users see in guided mode, and its `generate(parameters, seed)` function
-constructs the problem.
-
-## Saved QUBO format
-
-Every JSON file contains generation parameters, original problem data, variable names,
-encoding notes, validation metadata, and sparse QUBO coefficients. Saving problems also
-creates or updates a flattened `manifest.csv` in the output directory. The convention is:
+## Project layout
 
 ```text
-E(x) = offset
-     + sum_i linear[i] * x_i
-     + sum_{i<j} quadratic[i,j] * x_i * x_j
+configs/                 editable experiment settings
+docs/                    detailed user documentation
+problems/                QUBO generators and validation
+solvers/                 solver adapters
+generate.py              generate reproducible problem JSON files
+solve.py                 solve problem files and save result JSON files
+generated_problems/      local generated inputs (not committed)
+BenchmarkResults/        local experiment results (not committed)
 ```
-
-Linear terms are saved as `[variable, coefficient]`. Quadratic terms are saved as
-`[first_variable, second_variable, coefficient]`. This explicitly avoids symmetric-matrix
-double-counting ambiguity.
-
-Python code can load an instance and evaluate a sample as follows:
-
-```python
-from pathlib import Path
-
-from problems.common import qubo_energy
-from problems.manager import load_problem
-
-path = next(Path("generated_problems").glob("max_cut-*.json"))
-problem = load_problem(path)
-sample = [0] * problem["qubo"]["num_variables"]
-energy = qubo_energy(problem["qubo"], sample)
-```
-
-## Instance validation
-
-Structural and problem-specific validation runs automatically before an instance is
-saved. Small QUBOs are checked exhaustively against an independent objective calculation;
-larger QUBOs use deterministic sample checks. Validation errors prevent saving, while
-potentially trivial or biased structures are recorded as warnings.
-
-Warning codes can optionally be rejected using a predeclared configuration rule:
-
-```yaml
-validation:
-  max_attempts: 20
-  reject_warnings:
-    - disconnected_graph
-    - isolated_vertices
-```
-
-See [`VALIDATION.md`](VALIDATION.md) for all checks, warning codes, manifest columns, and
-guidance on constructing balanced benchmark collections.

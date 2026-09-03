@@ -323,10 +323,10 @@ without arguments for guided mode.
 
 ## Running a configuration
 
-`configs/solver_quickstart.yaml` runs all four solvers on one small saved instance:
+`configs/solve_random_qubo.yaml` is the ready-to-edit Random QUBO solver configuration:
 
 ```bash
-python solve.py configs/solver_quickstart.yaml
+python solve.py configs/solve_random_qubo.yaml
 ```
 
 The configuration format is intentionally small:
