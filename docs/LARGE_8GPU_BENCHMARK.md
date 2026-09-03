@@ -82,3 +82,22 @@ npm run dev
 
 The dashboard data importer accepts this positional results path and also supports the
 `BENCHMARK_RESULTS` environment variable.
+
+For the six-density, ten-seed sweep, point the importer at the suite root. It detects
+`suite_manifest.json`, combines all 60 instances, and adds density metadata to the
+dashboard's charts, search, instance table, and detail view:
+
+```bash
+cd benchmark-dashboard
+npm ci
+npm run data -- ../BenchmarkResults/density_sweep_100k
+npm run dev
+```
+
+To create a production build with the same suite on PowerShell:
+
+```powershell
+cd benchmark-dashboard
+$env:BENCHMARK_RESULTS = "../BenchmarkResults/density_sweep_100k"
+npm run build
+```
