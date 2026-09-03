@@ -5,3 +5,4 @@ scipy>=1.11
 highspy>=1.11,<2.0
 dwave-ocean-sdk>=9.0,<10.0
 simulated-bifurcation>=2.0,<3.0
+torch>=2.0

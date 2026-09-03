@@ -1,7 +1,7 @@
-"""Run a resumable four-way relative QUBO benchmark.
+"""Run a resumable six-way relative QUBO benchmark.
 
 The benchmark deliberately excludes exact enumeration and treats simulated
-bifurcation on CPU and CUDA as separate solver configurations.
+bifurcation and transverse-route flow on CPU and CUDA as separate configurations.
 """
 
 from __future__ import annotations
@@ -53,6 +53,16 @@ SOLVERS = {
     "bifurcation_cuda": {
         "solver_type": "simulated_bifurcation",
         "label": "Simulated Bifurcation (CUDA)",
+        "parameters": {"device": "cuda"},
+    },
+    "transverse_route_cpu": {
+        "solver_type": "transverse_route",
+        "label": "Transverse-Route Flow (CPU)",
+        "parameters": {"device": "cpu"},
+    },
+    "transverse_route_cuda": {
+        "solver_type": "transverse_route",
+        "label": "Transverse-Route Flow (CUDA)",
         "parameters": {"device": "cuda"},
     },
 }
@@ -193,7 +203,7 @@ def preflight(require_cuda: bool) -> dict:
             torch.cuda.get_device_name(index) for index in range(torch.cuda.device_count())
         ]
         if require_cuda and not torch.cuda.is_available():
-            errors.append("CUDA is unavailable to PyTorch, but the four-way benchmark requires it")
+            errors.append("CUDA is unavailable to PyTorch, but the six-way benchmark requires it")
     except ImportError:
         if "torch" not in missing:
             errors.append("PyTorch could not be imported")
@@ -237,10 +247,43 @@ def load_or_create_progress(
         with path.open("r", encoding="utf-8") as handle:
             progress = json.load(handle)
         if progress.get("benchmark_id") != benchmark_id:
-            raise RuntimeError(
-                "Existing progress.json belongs to different inputs or solver settings. "
-                "Choose another --output directory."
+            config_path = path.with_name("benchmark_config.json")
+            previous_config = {}
+            if config_path.is_file():
+                with config_path.open("r", encoding="utf-8") as handle:
+                    previous_config = json.load(handle)
+            previous_solvers = previous_config.get("solvers", {})
+            same_instances = previous_config.get("problem_paths") == [
+                str(item) for item in problem_paths
+            ]
+            compatible_expansion = (
+                bool(previous_solvers)
+                and same_instances
+                and all(alias in solvers and solvers[alias] == entry for alias, entry in previous_solvers.items())
+                and set(progress.get("tasks", {})).issubset(
+                    create_progress(benchmark_id, problems, problem_paths, solvers)["tasks"]
+                )
             )
+            if not compatible_expansion:
+                raise RuntimeError(
+                    "Existing progress.json belongs to different inputs or solver settings. "
+                    "Choose another --output directory."
+                )
+            expanded = create_progress(benchmark_id, problems, problem_paths, solvers)
+            expanded["created_at"] = progress.get("created_at", expanded["created_at"])
+            expanded["expanded_from_benchmark_id"] = progress.get("benchmark_id")
+            for key, previous_task in progress["tasks"].items():
+                task = {**expanded["tasks"][key], **previous_task}
+                instance_id = task["instance_id"]
+                alias = task["solver_alias"]
+                copied_result = path.parent / "raw" / instance_id / f"{alias}.json"
+                copied_failure = path.parent / "failures" / f"{instance_id}--{alias}.json"
+                if task["status"] == "completed" and copied_result.is_file():
+                    task["result_path"] = str(copied_result.resolve())
+                if task["status"] == "failed" and copied_failure.is_file():
+                    task["failure_path"] = str(copied_failure.resolve())
+                expanded["tasks"][key] = task
+            progress = expanded
         for task in progress["tasks"].values():
             if task["status"] == "running":
                 task["status"] = "pending"
@@ -365,7 +408,7 @@ def build_instance_report(instance_id: str, result_paths: dict[str, Path], failu
         "schema_version": 1,
         "instance_id": instance_id,
         "problem": any_result["problem"] if any_result else None,
-        "complete_four_way_comparison": len(results) == len(solvers),
+        "complete_six_way_comparison": len(results) == len(solvers),
         "best_energy": best_energy,
         "best_solver_aliases": best_aliases,
         "solver_results": rows,
@@ -378,7 +421,7 @@ def instance_markdown(report: dict, solvers: dict) -> str:
     lines = [
         f"# Instance report: {report['instance_id']}",
         "",
-        f"- Complete four-way comparison: {'yes' if report['complete_four_way_comparison'] else 'no'}",
+        f"- Complete six-way comparison: {'yes' if report['complete_six_way_comparison'] else 'no'}",
         f"- Best energy: {report['best_energy'] if report['best_energy'] is not None else 'unavailable'}",
         f"- Best solver(s): {', '.join(report['best_solver_aliases']) or 'none'}",
         "",
@@ -435,7 +478,7 @@ def write_instance_report(output: Path, report: dict, solvers: dict) -> None:
 
 
 def aggregate_reports(reports: list[dict], solvers: dict) -> tuple[dict, list[dict]]:
-    complete = [report for report in reports if report["complete_four_way_comparison"]]
+    complete = [report for report in reports if report["complete_six_way_comparison"]]
     rows = []
     for alias in solvers:
         all_rows = [
@@ -444,12 +487,7 @@ def aggregate_reports(reports: list[dict], solvers: dict) -> tuple[dict, list[di
             for row in report["solver_results"]
             if row["solver_alias"] == alias and row["completed"]
         ]
-        fair_rows = [
-            row
-            for report in complete
-            for row in report["solver_results"]
-            if row["solver_alias"] == alias
-        ]
+        fair_rows = all_rows
         energies = [row["energy"] for row in fair_rows]
         walls = [row["wall_seconds"] for row in fair_rows]
         rows.append(
@@ -458,7 +496,7 @@ def aggregate_reports(reports: list[dict], solvers: dict) -> tuple[dict, list[di
                 "solver": solvers[alias]["label"],
                 "completed_runs": len(all_rows),
                 "failed_runs": len(reports) - len(all_rows),
-                "complete_case_instances": len(fair_rows),
+                "successful_instances": len(fair_rows),
                 "wins_or_ties": sum(row["is_best_or_tied"] for row in fair_rows),
                 "win_or_tie_rate": (
                     statistics.mean(row["is_best_or_tied"] for row in fair_rows)
@@ -492,10 +530,14 @@ def aggregate_reports(reports: list[dict], solvers: dict) -> tuple[dict, list[di
         pairwise[left] = {}
         for right in aliases:
             wins = ties = losses = 0
-            for report in complete:
+            for report in reports:
                 energy_by_alias = {
-                    row["solver_alias"]: row["energy"] for row in report["solver_results"]
+                    row["solver_alias"]: row["energy"]
+                    for row in report["solver_results"]
+                    if row["completed"]
                 }
+                if left not in energy_by_alias or right not in energy_by_alias:
+                    continue
                 left_energy = energy_by_alias[left]
                 right_energy = energy_by_alias[right]
                 if close_energy(left_energy, right_energy):
@@ -508,7 +550,7 @@ def aggregate_reports(reports: list[dict], solvers: dict) -> tuple[dict, list[di
     aggregate = {
         "schema_version": 1,
         "instances_requested": len(reports),
-        "complete_four_way_instances": len(complete),
+        "complete_six_way_instances": len(complete),
         "solver_summary": rows,
         "pairwise_energy_outcomes": pairwise,
     }
@@ -517,12 +559,12 @@ def aggregate_reports(reports: list[dict], solvers: dict) -> tuple[dict, list[di
 
 def aggregate_markdown(aggregate: dict, solvers: dict) -> str:
     lines = [
-        "# Four-solver relative QUBO benchmark",
+        "# Six-solver relative QUBO benchmark",
         "",
         f"- Instances requested: {aggregate['instances_requested']}",
-        f"- Complete four-way comparisons: {aggregate['complete_four_way_instances']}",
+        f"- Complete six-way comparisons: {aggregate['complete_six_way_instances']}",
         "- Exact enumeration: excluded",
-        "- Comparative averages use complete four-way instances only.",
+        "- Per-solver averages use that solver's successful runs; pairwise outcomes use shared successful instances.",
         "",
         "## Average results",
         "",
@@ -570,7 +612,7 @@ def aggregate_markdown(aggregate: dict, solvers: dict) -> str:
             "- Rank and gap metrics are calculated within each instance before averaging.",
             "- A win includes an energy tie within numerical tolerance.",
             "- Runtime is wall-clock time measured around the verified solver adapter.",
-            "- CPU and CUDA bifurcation use the same algorithmic defaults but are reported separately.",
+            "- CPU and CUDA runs use the same per-algorithm defaults but are reported separately.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -611,7 +653,8 @@ def export_aggregate(output: Path, reports: list[dict], solvers: dict) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         description=(
-            "Benchmark SciPy+HiGHS, Ocean SA, and simulated bifurcation on CPU and CUDA. "
+            "Benchmark SciPy+HiGHS, Ocean SA, simulated bifurcation, and transverse-route "
+            "flow on CPU and CUDA. "
             "Exact enumeration is never used."
         )
     )
@@ -624,13 +667,13 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--output",
         type=Path,
-        default=Path("BenchmarkResults/relative_4_solver"),
+        default=Path("BenchmarkResults/relative_6_solver"),
         help="Benchmark output directory",
     )
     result.add_argument(
         "--config",
         type=Path,
-        help="Optional YAML parameter overrides keyed by the four solver aliases",
+        help="Optional YAML parameter overrides keyed by the six solver aliases",
     )
     result.add_argument(
         "--snapshots",
@@ -651,6 +694,11 @@ def parser() -> argparse.ArgumentParser:
         "--fail-fast",
         action="store_true",
         help="Stop after the first solver failure (progress remains resumable)",
+    )
+    result.add_argument(
+        "--retry-failures",
+        action="store_true",
+        help="Retry failed tasks from an earlier run; by default they remain recorded failures",
     )
     result.add_argument(
         "--dry-run",
@@ -693,7 +741,8 @@ def main(argv: list[str] | None = None) -> int:
         "notes": [
             "Exact enumeration is excluded.",
             "Bifurcation CPU and CUDA are independent benchmark configurations.",
-            "Comparative aggregate metrics use only instances completed by all four solvers.",
+            "Transverse-route CPU and CUDA are independent benchmark configurations.",
+            "Comparative aggregate metrics use only instances completed by all six solvers.",
         ],
     }
     progress_path = args.output / "progress.json"
@@ -721,6 +770,9 @@ def main(argv: list[str] | None = None) -> int:
                         print(progress_line(progress, f"resume-skip {instance_id} / {alias}"))
                         continue
                     task["status"] = "pending"
+                if task["status"] == "failed" and not args.retry_failures:
+                    print(progress_line(progress, f"resume-skip failed {instance_id} / {alias}"))
+                    continue
                 task.update(
                     {
                         "status": "running",
@@ -777,7 +829,7 @@ def main(argv: list[str] | None = None) -> int:
                     update_progress(progress_path, progress)
                     print(progress_line(progress, f"finished {instance_id} / {alias}"), flush=True)
 
-                # Refresh the per-instance report as soon as all four attempts finish.
+                # Refresh the per-instance report as soon as all six attempts finish.
                 instance_tasks = [
                     progress["tasks"][f"{instance_id}::{solver_alias}"] for solver_alias in solvers
                 ]

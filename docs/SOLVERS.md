@@ -1,6 +1,6 @@
 # QUBO Solvers
 
-The project currently provides four solver types. Every solver reads the same sparse
+The project currently provides five solver types. Every solver reads the same sparse
 QUBO representation and returns the same result structure. The returned binary sample
 is evaluated again with the project's independent `qubo_energy` function before a result
 is saved.
@@ -13,6 +13,7 @@ python solve.py --describe exact
 python solve.py --describe scipy_highs
 python solve.py --describe ocean_sa
 python solve.py --describe simulated_bifurcation
+python solve.py --describe transverse_route
 ```
 
 ## Choosing a solver
@@ -23,6 +24,7 @@ python solve.py --describe simulated_bifurcation
 | `scipy_highs` | Proven optimum when status is `optimal`; otherwise a feasible incumbent | Small or moderately sparse QUBOs | No |
 | `ocean_sa` | Heuristic solution | Broad CPU baseline, including sparse instances | No |
 | `simulated_bifurcation` | Heuristic solution | Dense quadratic models and highly parallel searches | CUDA |
+| `transverse_route` | Heuristic solution | Batched geometric escape dynamics on dense or sparse QUBOs | CUDA |
 
 Exact enumeration grows as \(2^n\). HiGHS linearization adds one product variable and
 three constraints per stored quadratic interaction. Simulated bifurcation constructs a
@@ -45,6 +47,7 @@ The progress unit depends on the solver:
 | SciPy + HiGHS | Time limit, or node limit when time is unlimited | Buffered live-incumbent callbacks during one solve |
 | Ocean SA | Completed reads | Reconstructed from one sampler response |
 | Simulated Bifurcation | Evolution-step limit | Deterministic checkpoint replays |
+| Transverse-Route Flow | Flow steps | Captured during one batched integration |
 
 Discrete work budgets round checkpoint targets upward. Consequently, `num_snapshots`
 cannot exceed the number of states, reads, or evolution steps available to the relevant
@@ -235,7 +238,7 @@ device: cuda
 ```
 
 An explicit CUDA request fails clearly if CUDA is unavailable. `device: auto` falls back
-to the CPU. The other three implemented solvers do not have GPU backends.
+to the CPU. Exact Enumeration, SciPy + HiGHS, and Ocean SA do not have GPU backends.
 
 ### Suggested sweeps
 
@@ -255,6 +258,53 @@ least 10 seeds for quality statistics.
 Benchmark `device: cpu` and `device: cuda` as different execution platforms. Do not combine
 their raw timings without recording the processor/GPU model, PyTorch version, dtype, and
 device; the saved result already records the software version, dtype, and selected device.
+
+## Transverse-Route Geometric Flow (`transverse_route`)
+
+### What it does
+
+This built-in PyTorch solver implements the first-order manifold dynamics specified in
+[`new_solver.md`](new_solver.md). It converts the QUBO exactly to Ising form, scales its
+fields by the maximum absolute row interaction bound, and evolves independent angular
+trajectories in one batch. The longitudinal coordinate is `cos(theta)`, the required route
+coordinate is `cos(theta) * sin(theta)`, and the optional higher-order route coordinate is
+`sin(theta)^3`. All active interaction channels and agents are concatenated into one dense
+GEMM or sparse SpMM per derivative evaluation.
+
+The confinement follows the monotone power schedule from `kappa_initial` to `kappa_final`.
+Candidates are obtained from the signs of the longitudinal coordinates and the solver
+retains the lowest exact QUBO objective seen at any candidate checkpoint. This is a
+heuristic solver and does not claim global optimality.
+
+### Parameters
+
+| Parameter | Type | Default | Meaning for Transverse-Route Flow |
+|---|---:|---:|---|
+| `agents` | integer | `64` | Independent angular trajectories evolved as matrix columns. |
+| `max_steps` | integer | `1000` | Fixed-step integration updates. |
+| `time_step` | number | `0.05` | Dimensionless step after coefficient normalization. |
+| `mobility` | number | `1.0` | Positive multiplier on the negative energy gradient. |
+| `route_strength` | number | `1.0` | Weight of the endpoint-oriented route channel. Keep this at one for the exact collective-flip curvature identity; zero is the route ablation. |
+| `gamma` | number | `0.0` | Weight of the optional higher-order midpoint route channel. |
+| `kappa_initial` | number | `-1.0` | Initial transverse confinement. Negative values open the transverse manifold. |
+| `kappa_final` | number | `2.0` | Final transverse confinement. Positive values favor binary endpoints. |
+| `schedule_exponent` | number | `1.0` | Power-law confinement schedule exponent. |
+| `integrator` | choice | `euler` | `euler` uses one interaction multiply per step; `heun` uses two for improved stability. |
+| `candidate_interval` | integer | `25` | Steps between best-seen discrete candidate evaluations. Snapshot steps are always evaluated too. |
+| `matrix_format` | choice | `auto` | `dense`, `sparse`, or automatic selection using matrix density. |
+| `sparse_threshold` | number | `0.15` | Directed density at or below which `auto` chooses sparse SpMM. |
+| `dtype` | choice | `float32` | `float32` or `float64` PyTorch computation. |
+| `device` | string | `cpu` | `cpu`, `auto`, `cuda`, or an indexed CUDA device. |
+| `seed` | integer | `0` | Seed for uniform random initial angles. |
+| `max_variables` | integer | `100000` | Safety limit for the batched state allocation. |
+| `max_dense_variables` | integer | `10000` | Safety gate for dense matrix allocation. |
+| `num_snapshots` | integer | `0` | Equally spaced best-seen flow checkpoints. |
+
+The minimal theoretical model uses `route_strength: 1` and `gamma: 0`. To test the full
+route-separation model, sweep positive `gamma` values. For direct ablations, compare
+`route_strength: 0`, fixed confinement (`kappa_initial == kappa_final`), and the default
+continuation schedule. Use `device: auto` or `device: cuda` when enough agents are present
+to benefit from accelerator matrix throughput.
 
 ## Running one problem
 

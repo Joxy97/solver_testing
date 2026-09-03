@@ -1,9 +1,9 @@
 # QUBO Problem Generator and Solver Benchmarks
 
 A small collection of Python scripts for creating reproducible QUBO problem instances.
-Generated problems are saved as ordinary JSON files and can be solved through four simple
-solver adapters. A resumable relative-benchmark runner compares solver energies, rankings,
-solution distances, and runtimes across a problem set.
+Generated problems are saved as ordinary JSON files and can be solved through five simple
+solver adapters. A resumable six-configuration benchmark runner compares solver energies,
+rankings, solution distances, and runtimes across a problem set.
 
 ## Install
 
@@ -72,6 +72,7 @@ List or inspect the available solvers:
 ```bash
 python solve.py --list
 python solve.py --describe ocean_sa
+python solve.py --describe transverse_route
 ```
 
 Run one saved problem:
@@ -86,36 +87,50 @@ Add equally spaced best-solution checkpoints with `num_snapshots` (zero is the d
 python solve.py --problem path/to/problem.json --solver ocean_sa --set num_snapshots=5
 ```
 
-Or run the prepared configuration, which selects one small Random QUBO and applies all four
-solvers:
+Or run the prepared configuration, which selects one small Random QUBO and applies its
+configured solvers:
 
 ```bash
 python solve.py configs/solver_quickstart.yaml
 ```
 
 Running `python solve.py` with no arguments starts a guided mode. Available backends are
-Exact Enumeration, SciPy + HiGHS MILP, D-Wave Ocean Simulated Annealing, and Simulated
-Bifurcation. Only Simulated Bifurcation supports GPU execution; set its `device` parameter
-to `cuda` or `auto`.
+Exact Enumeration, SciPy + HiGHS MILP, D-Wave Ocean Simulated Annealing, Simulated
+Bifurcation, and Transverse-Route Geometric Flow. The last two support GPU execution;
+set their `device` parameter to `cuda` or `auto`.
 
 See [`SOLVERS.md`](SOLVERS.md) for each solver's limitations, complete parameter list,
 GPU instructions, suggested sweeps, configuration format, and saved-result layout.
 
-## Four-solver relative benchmark
+## Six-configuration relative benchmark
 
-Compare SciPy + HiGHS, Ocean SA, and Simulated Bifurcation on CPU and CUDA without using
-Exact Enumeration:
+Compare SciPy + HiGHS, Ocean SA, Simulated Bifurcation on CPU and CUDA, and
+Transverse-Route Flow on CPU and CUDA without using Exact Enumeration:
 
 ```bash
-python benchmark_4_solvers.py generated_problems \
-  --config configs/relative_4_solver_benchmark.yaml \
-  --output BenchmarkResults/relative_4_solver
+python benchmark_6_solvers.py generated_problems \
+  --config configs/relative_6_solver_benchmark.yaml \
+  --output BenchmarkResults/relative_6_solver
 ```
 
 The runner saves progress after every solver attempt, resumes safely, writes a comparison
 report for every QUBO, and produces complete-case averages over instances. See
 [`docs/RELATIVE_BENCHMARK.md`](docs/RELATIVE_BENCHMARK.md) for setup, metrics, and output
 details.
+
+## 100k-variable benchmark on eight GPUs
+
+Prepare a compact seed-defined Random QUBO with 100,000 variables and density `0.25`, then
+benchmark Simulated Bifurcation against Transverse-Route Flow across eight CUDA devices:
+
+```bash
+python benchmark_100k_8gpu.py
+```
+
+The problem is materialized directly on each GPU because an explicit sparse JSON file
+would contain roughly 1.25 billion quadratic terms. See
+[`docs/LARGE_8GPU_BENCHMARK.md`](docs/LARGE_8GPU_BENCHMARK.md) for the fresh-clone command,
+memory requirements, sharding semantics, resume behavior, and dashboard import command.
 
 ## Available problem families
 

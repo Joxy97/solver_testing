@@ -12,7 +12,7 @@ from pathlib import Path
 
 from problems.common import qubo_energy
 
-from . import exact, ocean_sa, scipy_highs, simulated_bifurcation
+from . import exact, ocean_sa, scipy_highs, simulated_bifurcation, transverse_route
 from .common import SolverCapabilityError
 
 
@@ -21,6 +21,7 @@ SOLVERS = {
     "scipy_highs": scipy_highs,
     "ocean_sa": ocean_sa,
     "simulated_bifurcation": simulated_bifurcation,
+    "transverse_route": transverse_route,
 }
 
 

@@ -1,4 +1,6 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+BenchmarkResults/
+benchmark_dashboard/
 generated_problems/
