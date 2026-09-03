@@ -51,6 +51,7 @@ def solve_problem(
     solver_type: str,
     parameters: dict | None = None,
     source: str | Path | None = None,
+    instance_name: str | None = None,
 ) -> dict:
     """Solve one loaded problem and return the normalized, verified result record."""
     module = _module(solver_type)
@@ -104,6 +105,8 @@ def solve_problem(
         "solver_type": solver_type,
         "parameters": identity_parameters,
     }
+    if instance_name is not None:
+        identity["solver_instance_name"] = instance_name
     digest = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:16]
@@ -119,6 +122,7 @@ def solve_problem(
         },
         "solver": {
             "type": solver_type,
+            "instance_name": instance_name,
             "name": module.NAME,
             "version": module.version(),
             "parameters": normalized,

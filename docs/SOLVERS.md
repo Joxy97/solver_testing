@@ -323,49 +323,80 @@ without arguments for guided mode.
 
 ## Running a configuration
 
-`configs/solve_random_qubo.yaml` is the ready-to-edit Random QUBO solver configuration:
+`configs/solve/solve_random_qubo.yaml` is the ready-to-edit Random QUBO solver configuration:
 
 ```bash
-python solve.py configs/solve_random_qubo.yaml
+python solve.py configs/solve/solve_random_qubo.yaml
 ```
 
 The configuration format is intentionally small:
 
 ```yaml
-output_folder: ../solver_results
+problem_root: ../../generated_problems
 problem_files:
-  - ../generated_problems/random_qubo/core/n_0020/density_0p01/integer/*.json
+  - ../../generated_problems/random_qubo_*/qubos/*.json
 problem_limit: 1
 continue_on_error: false
 
+execution:
+  mode: parallel
+  order: problem_first
+  cpu_workers: 2
+
 solvers:
   - type: exact
+    instance_name: exact_reference
     parameters:
       max_variables: 24
 
   - type: ocean_sa
+    instance_name: ocean_sa_default
     parameters:
       num_reads: 100
       num_sweeps: 1000
       seed: 42
+
+  - type: transverse_route
+    instance_name: trf_pool
+    devices: [cuda:0, cuda:1, cuda:2, cuda:3]
+    replicas: 1
+    parameters:
+      agents: 64
+      max_steps: 1000
 ```
 
-Paths and wildcard patterns are resolved relative to the configuration file. Directories
+Every solver entry needs a unique `instance_name`. Each problem must be below a batch's
+`qubos` directory. Solutions are placed in its sibling `results` directory, and the solver
+instance name is appended to the JSON filename. Paths and wildcard patterns are resolved
+relative to the configuration file. Directories
 are searched recursively. `problem_limit` is useful for trying a configuration before a
 full run. With `continue_on_error: true`, capability-limit failures are printed and the
 remaining solver/problem combinations continue.
 
+`execution.mode` is `sequential` or `parallel`. `execution.order` is `problem_first` or
+`solver_first` and controls queue priority; parallel completion order depends on runtime.
+CPU work uses at most `cpu_workers` processes. A solver's optional `devices` list forms a
+GPU pool, with one active task per CUDA device. Fixed `parameters.device: cuda:N`
+assignments are also respected and serialized per GPU.
+
+`replicas` defaults to one. A higher value creates independent files named
+`INSTANCE_NAME_replica_N`; numeric solver seeds increment for every replica by default.
+Set `increment_seed_per_replica: false` to disable that. Replicas are multi-start runs:
+one native solver run still executes on one GPU.
+
 ## Saved results
 
-Results are stored by solver:
+Results are stored beside their QUBO batch:
 
 ```text
-solver_results/
-├── manifest.csv
-├── exact/
-├── scipy_highs/
-├── ocean_sa/
-└── simulated_bifurcation/
+random_qubo_1000_0.01/
+├── qubos/
+│   ├── manifest.csv
+│   └── seed_42.json
+└── results/
+    ├── manifest.csv
+    ├── seed_42--ocean_sa_default.json
+    └── seed_42--bifurcation_gpu0.json
 ```
 
 Each JSON result records the problem ID and source, normalized parameters, package version,

@@ -75,10 +75,14 @@ def generate_problem(
     parameters: dict | None = None,
     seed: int = 0,
     reject_warnings: Iterable[str] | None = None,
+    progress=None,
 ) -> dict:
     module = _module(problem_type)
     normalized = _validate_parameters(module.PARAMETERS, parameters or {})
-    generated = module.generate(normalized, int(seed))
+    if problem_type == "random_qubo":
+        generated = module.generate(normalized, int(seed), progress=progress)
+    else:
+        generated = module.generate(normalized, int(seed))
     resolved_parameters = generated.pop("parameters", normalized)
     problem = {
         "schema_version": 2,
@@ -230,6 +234,8 @@ def _module(problem_type: str):
 
 
 def _instance_identifier(problem: dict) -> str:
+    if problem.get("problem_type") == "random_qubo":
+        return f"seed_{int(problem['seed'])}"
     content = {key: value for key, value in problem.items() if key != "instance_id"}
     canonical = json.dumps(content, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()

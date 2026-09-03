@@ -6,4 +6,3 @@ generated_problems/
 .venv/
 .next/
 dist/
-benchmark-dashboard/

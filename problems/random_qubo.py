@@ -118,19 +118,37 @@ def _sample_quadratic_pairs(
         yield _pair_from_index(num_variables, pair_index)
 
 
-def generate(parameters: dict, seed: int) -> dict:
+def generate(parameters: dict, seed: int, progress=None) -> dict:
     rng = np.random.default_rng(seed)
     num_variables = parameters["num_variables"]
     builder = QuboBuilder(
         num_variables, [f"binary_{index}" for index in range(num_variables)]
     )
+    total_pairs = num_variables * (num_variables - 1) // 2
+    total_work = num_variables + total_pairs
+    report_every = max(1, total_work // 1000)
+    next_report = report_every
+    if progress:
+        progress(0, total_work, "linear terms")
     for variable in range(num_variables):
         if rng.random() >= parameters["zero_linear_probability"]:
             builder.add_linear(variable, _coefficient(parameters, rng))
+        if progress and variable + 1 >= next_report:
+            progress(variable + 1, total_work, "linear terms")
+            next_report += report_every
     for first, second in _sample_quadratic_pairs(
         num_variables, parameters["quadratic_density"], rng
     ):
         builder.add_quadratic(first, second, _coefficient(parameters, rng))
+        if progress:
+            scanned = _pair_prefix(num_variables, first) + (second - first)
+            completed = num_variables + scanned
+            if completed >= next_report:
+                progress(completed, total_work, "quadratic terms")
+                next_report = completed + report_every
+
+    if progress:
+        progress(max(0, total_work - 1), total_work, "validating")
 
     return {
         "qubo": builder.build(),

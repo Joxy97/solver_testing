@@ -1,0 +1,38 @@
+# Each entry runs every generated instance once. Add, remove, or copy entries as needed.
+problem_files:
+  - ../../generated_problems/random_qubo_*/qubos/*.json
+problem_root: ../../generated_problems
+continue_on_error: true
+
+execution:
+  mode: parallel          # sequential or parallel
+  order: solver_first     # problem_first or solver_first queue order
+  cpu_workers: 1          # maximum simultaneous CPU solver tasks
+
+solvers:
+  - type: ocean_sa
+    instance_name: SA
+    parameters:
+      num_reads: 4
+      num_sweeps: 10
+      seed: 42
+
+  - type: simulated_bifurcation
+    instance_name: SB
+    devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
+    replicas: 1           # set >1 for independent multi-start runs per QUBO
+    parameters:
+      agents: 4
+      max_steps: 10
+      timeout: 60
+      seed: 42
+      early_stopping: false
+
+  - type: transverse_route
+    instance_name: TRF
+    devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
+    replicas: 1           # set >1 for independent multi-start runs per QUBO
+    parameters:
+      agents: 4
+      max_steps: 10
+      seed: 42

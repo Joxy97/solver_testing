@@ -1,0 +1,14 @@
+# Edit these values to define your Random QUBO experiment.
+output_folder: ../../generated_problems/
+base_seed: 42
+
+problems:
+  - type: random_qubo
+    count: 1
+    parameters:
+      num_variables: 1000000
+      quadratic_density: 0.01
+      distribution: uniform
+      coefficient_min: -10
+      coefficient_max: 10
+      zero_linear_probability: 0.0
