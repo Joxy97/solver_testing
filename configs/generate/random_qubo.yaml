@@ -7,7 +7,7 @@ problems:
     count: 1
     parameters:
       num_variables: 1000000
-      quadratic_density: 0.01
+      quadratic_density: 0.005
       distribution: uniform
       coefficient_min: -10
       coefficient_max: 10

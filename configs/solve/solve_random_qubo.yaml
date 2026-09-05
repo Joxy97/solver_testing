@@ -13,8 +13,8 @@ solvers:
   - type: ocean_sa
     instance_name: SA
     parameters:
-      num_reads: 4
-      num_sweeps: 10
+      num_reads: 16
+      num_sweeps: 1000
       seed: 42
 
   - type: simulated_bifurcation
@@ -22,17 +22,16 @@ solvers:
     devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
     replicas: 1           # set >1 for independent multi-start runs per QUBO
     parameters:
-      agents: 4
-      max_steps: 10
-      timeout: 60
+      agents: 16
+      max_steps: 1000
       seed: 42
       early_stopping: false
 
   - type: transverse_route
     instance_name: TRF
-    devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
+    devices: [cuda:1]     # add devices to distribute QUBOs across a GPU pool
     replicas: 1           # set >1 for independent multi-start runs per QUBO
     parameters:
-      agents: 4
-      max_steps: 10
+      agents: 16
+      max_steps: 1000
       seed: 42
