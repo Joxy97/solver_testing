@@ -12,7 +12,7 @@ execution:
 solvers:
   - type: simulated_bifurcation
     instance_name: bSB
-    devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
+    devices: [cuda:0, cuda:1, cuda:2, cuda:3, cuda:4, cuda:5, cuda:6, cuda:7]     # add devices to distribute QUBOs across a GPU pool
     replicas: 1           # set >1 for independent multi-start runs per QUBO
     parameters:
       agents: 8
@@ -26,7 +26,7 @@ solvers:
 
   - type: simulated_bifurcation
     instance_name: dSB
-    devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
+    devices: [cuda:0, cuda:1, cuda:2, cuda:3, cuda:4, cuda:5, cuda:6, cuda:7]     # add devices to distribute QUBOs across a GPU pool
     replicas: 1           # set >1 for independent multi-start runs per QUBO
     parameters:
       agents: 8
@@ -40,7 +40,7 @@ solvers:
 
   - type: transverse_route
     instance_name: TRF
-    devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
+    devices: [cuda:0, cuda:1, cuda:2, cuda:3, cuda:4, cuda:5, cuda:6, cuda:7]     # add devices to distribute QUBOs across a GPU pool
     replicas: 1           # set >1 for independent multi-start runs per QUBO
     parameters:
       agents: 8
