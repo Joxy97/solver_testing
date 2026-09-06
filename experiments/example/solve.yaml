@@ -1,7 +1,7 @@
 # Each entry runs every generated instance once. Add, remove, or copy entries as needed.
-problem_root: ./
+problem_root: .
 problem_files:
-  - ./*/qubos/*.json      # Must include problem root
+  - "*/qubos/*.qubo"
 continue_on_error: true
 
 execution:
@@ -10,28 +10,41 @@ execution:
   cpu_workers: 1          # maximum simultaneous CPU solver tasks
 
 solvers:
-  - type: ocean_sa
-    instance_name: SA
-    parameters:
-      num_reads: 4
-      num_sweeps: 100
-      seed: 42
-
   - type: simulated_bifurcation
-    instance_name: SB
+    instance_name: bSB
     devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
     replicas: 1           # set >1 for independent multi-start runs per QUBO
     parameters:
-      agents: 4
+      agents: 2
       max_steps: 100
       seed: 42
       early_stopping: false
+      mode: ballistic
+      heated: true
+      max_variables: 10000
+      num_snapshots: 100
+
+  - type: simulated_bifurcation
+    instance_name: dSB
+    devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
+    replicas: 1           # set >1 for independent multi-start runs per QUBO
+    parameters:
+      agents: 2
+      max_steps: 100
+      seed: 42
+      early_stopping: false
+      mode: discrete
+      heated: true
+      num_snapshots: 100
+      max_variables: 10000
 
   - type: transverse_route
     instance_name: TRF
     devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
     replicas: 1           # set >1 for independent multi-start runs per QUBO
     parameters:
-      agents: 3
+      agents: 2
       max_steps: 100
       seed: 42
+      num_snapshots: 100
+      max_variables: 10000

@@ -1,16 +1,34 @@
-# Edit these values to define your Random QUBO experiment.
+# Edit these values to define your Quadratic Knapsack experiment.
 output_folder: ./
 base_seed: 42
 
 problems:
-  - type: random_qubo
+  - type: quadratic_knapsack
     count: 8
+    batch_name: QK_100
+    parameters:
+      num_items: 100
 
-  - type: max_cut
+  - type: quadratic_knapsack
     count: 8
+    batch_name: QK_500
+    parameters:
+      num_items: 500
 
-  - type: maximum_clique
+  - type: quadratic_knapsack
     count: 8
+    batch_name: QK_1000
+    parameters:
+      num_items: 1000
 
-  - type: random_qubo
-    count: 10
+  - type: quadratic_knapsack
+    count: 8
+    batch_name: QK_5000
+    parameters:
+      num_items: 5000
+
+  - type: quadratic_knapsack
+    count: 8
+    batch_name: QK_10000
+    parameters:
+      num_items: 10000

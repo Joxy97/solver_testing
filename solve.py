@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from problems.manager import load_problem
+from problems.manager import close_problem, load_problem
 from solvers.manager import (
     SolverCapabilityError,
     describe_solver,
@@ -39,13 +39,12 @@ def _solve_worker(
     """Process-pool entry point. The parent process alone writes result files."""
     source = Path(problem_path)
     problem = load_problem(source)
-    return solve_problem(
-        problem,
-        solver_type,
-        parameters,
-        source=source,
-        instance_name=instance_name,
-    )
+    try:
+        return solve_problem(
+            problem, solver_type, parameters, source=source, instance_name=instance_name,
+        )
+    finally:
+        close_problem(problem)
 
 
 def _format_default(value) -> str:
@@ -97,13 +96,12 @@ def _solve_and_save(
     instance_name: str | None = None,
 ) -> Path:
     problem = load_problem(problem_path)
-    result = solve_problem(
-        problem,
-        solver_type,
-        parameters,
-        source=problem_path,
-        instance_name=instance_name,
-    )
+    try:
+        result = solve_problem(
+            problem, solver_type, parameters, source=problem_path, instance_name=instance_name,
+        )
+    finally:
+        close_problem(problem)
     path = save_result(result, output)
     print(
         f"{problem['instance_id']} with {solver_type}: {result['status']}, "
@@ -122,14 +120,14 @@ def _expand_problem_files(patterns: list[str], config_path: Path) -> list[Path]:
         if not candidate.is_absolute():
             candidate = config_path.parent / candidate
         if candidate.is_dir():
-            matches = candidate.rglob("*.json")
+            matches = (p for p in candidate.rglob("*") if p.suffix.lower() in {".qubo", ".json"})
         elif any(character in str(candidate) for character in "*?["):
             matches = (Path(match) for match in glob.glob(str(candidate), recursive=True))
         else:
             matches = [candidate]
-        files.update(path.resolve() for path in matches if path.is_file())
+        files.update(path.resolve() for path in matches if path.is_file() and path.suffix.lower() in {".qubo", ".json"})
     if not files:
-        raise ValueError("problem_files did not match any JSON problem files")
+        raise ValueError("problem_files did not match any .qubo or legacy .json problem files")
     return sorted(files)
 
 
@@ -483,9 +481,9 @@ def _prompt_value(name: str, specification: dict):
 
 def _guided_mode() -> None:
     print("QUBO Solver\n")
-    problem_text = input("Path to a saved problem JSON: ").strip()
+    problem_text = input("Path to a saved .qubo (or legacy .json) problem: ").strip()
     if not problem_text:
-        raise ValueError("A problem JSON path is required")
+        raise ValueError("A saved problem path is required")
     problem_path = Path(problem_text)
 
     available = list_solvers()
@@ -521,7 +519,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("config", nargs="?", type=Path, help="YAML solver configuration")
     parser.add_argument("--list", action="store_true", help="List available solvers")
     parser.add_argument("--describe", metavar="TYPE", help="Explain a solver and its parameters")
-    parser.add_argument("--problem", type=Path, help="Saved QUBO problem JSON")
+    parser.add_argument("--problem", type=Path, help="Saved .qubo or legacy .json problem")
     parser.add_argument("--solver", metavar="TYPE", help="Solver to use")
     parser.add_argument(
         "--set",

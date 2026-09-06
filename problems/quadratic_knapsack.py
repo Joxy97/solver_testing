@@ -4,7 +4,8 @@ import itertools
 
 import numpy as np
 
-from .common import QuboBuilder, random_positive_integers, slack_weights
+from .common import QuboBuilder, qubo_energy, random_positive_integers, slack_weights
+from .storage import BLOCK, QuadraticTerms, from_sorted, pair_start, quadratic_blocks
 
 
 NAME = "Quadratic Knapsack"
@@ -88,31 +89,34 @@ def generate(parameters: dict, seed: int) -> dict:
     if parameters["min_quadratic_value"] > parameters["max_quadratic_value"]:
         raise ValueError("min_quadratic_value cannot exceed max_quadratic_value")
 
-    quadratic_values = []
-    for first, second in itertools.combinations(range(num_items), 2):
-        if rng.random() < parameters["quadratic_density"]:
-            value = int(
-                rng.integers(
-                    parameters["min_quadratic_value"],
-                    parameters["max_quadratic_value"] + 1,
-                )
-            )
-            quadratic_values.append([first, second, value])
+    total_possible_value = sum(values)
+    def bonus_terms():
+        nonlocal total_possible_value
+        for first, second in itertools.combinations(range(num_items), 2):
+            if rng.random() < parameters["quadratic_density"]:
+                value = int(rng.integers(
+                    parameters["min_quadratic_value"], parameters["max_quadratic_value"] + 1,
+                ))
+                total_possible_value += value
+                yield first, second, value
+
+    bonus_qubo = from_sorted(num_items, np.zeros(num_items, dtype="<f8"), bonus_terms())
+    quadratic_values = bonus_qubo["quadratic"]
 
     capacity = max(1, int(sum(weights) * parameters["capacity_ratio"]))
     slack = slack_weights(capacity)
-    total_possible_value = sum(values) + sum(value for _, _, value in quadratic_values)
     penalty = parameters["penalty"]
     if penalty is None:
         penalty = float(total_possible_value + 1)
 
     variable_names = [f"item_{index}" for index in range(num_items)]
     variable_names += [f"capacity_slack_{index}" for index in range(len(slack))]
-    builder = QuboBuilder(len(variable_names), variable_names)
+    builder = QuboBuilder(len(variable_names), variable_names, packed=True)
     for item, value in enumerate(values):
         builder.add_linear(item, -value)
-    for first, second, value in quadratic_values:
-        builder.add_quadratic(first, second, -value)
+    for first, second, coefficients in quadratic_blocks(bonus_qubo):
+        positions = first * (2 * len(variable_names) - first - 1) // 2 + second - first - 1
+        builder.quadratic[positions] = -coefficients
 
     capacity_coefficients = {item: float(weight) for item, weight in enumerate(weights)}
     for offset, slack_weight in enumerate(slack):
@@ -124,6 +128,7 @@ def generate(parameters: dict, seed: int) -> dict:
     return {
         "parameters": resolved,
         "qubo": builder.build(),
+        "_resources": [bonus_qubo],
         "problem_data": {
             "item_weights": weights,
             "item_values": values,
@@ -149,6 +154,7 @@ def validate(problem: dict) -> dict:
         add_warning,
         check_encoding,
         finite_statistics,
+        array_statistics,
         merge_validation,
         validation_result,
     )
@@ -169,16 +175,27 @@ def validate(problem: dict) -> dict:
     if not 1 <= capacity <= sum(weights):
         add_error(result, "invalid_capacity", "Knapsack capacity must lie between 1 and total item weight.")
 
-    seen_pairs = set()
-    for first, second, bonus in bonuses:
-        pair = (first, second)
-        if not 0 <= first < second < num_items or pair in seen_pairs or bonus <= 0:
-            add_error(result, "invalid_quadratic_bonus", "Quadratic item bonuses contain an invalid pair or value.")
-        seen_pairs.add(pair)
-    reachable_slack = {0}
-    for slack_weight in slack:
-        reachable_slack |= {value + slack_weight for value in tuple(reachable_slack)}
-    if any(value not in reachable_slack for value in range(capacity + 1)):
+    bonus_mapping = {"num_variables": num_items, "linear": [], "quadratic": bonuses, "offset": 0.0}
+    total_bonus = 0.0
+    if isinstance(bonuses, QuadraticTerms):
+        for first, second, coefficients in quadratic_blocks(bonus_mapping):
+            if np.any(first >= second) or np.any(second >= num_items) or np.any(coefficients <= 0) or not np.all(np.isfinite(coefficients)):
+                add_error(result, "invalid_quadratic_bonus", "Quadratic item bonuses contain an invalid pair or value.")
+            total_bonus += float(np.sum(coefficients))
+    else:
+        seen_pairs = set()
+        for first, second, bonus in bonuses:
+            pair = (first, second)
+            if not 0 <= first < second < num_items or pair in seen_pairs or bonus <= 0:
+                add_error(result, "invalid_quadratic_bonus", "Quadratic item bonuses contain an invalid pair or value.")
+            seen_pairs.add(pair)
+            total_bonus += bonus
+    represented = 0
+    for slack_weight in sorted(slack):
+        if slack_weight <= 0 or slack_weight > represented + 1:
+            break
+        represented += slack_weight
+    if represented < capacity:
         add_error(result, "invalid_slack_encoding", "Slack variables cannot represent every unused capacity value.")
 
     items_that_fit = sum(weight <= capacity for weight in weights)
@@ -186,7 +203,7 @@ def validate(problem: dict) -> dict:
         add_warning(result, "no_item_fits", "No generated item fits inside the knapsack capacity.")
     if sum(weights) <= capacity:
         add_warning(result, "all_items_fit", "All generated items fit simultaneously, so capacity is nonbinding.")
-    total_possible_value = sum(values) + sum(bonus for _, _, bonus in bonuses)
+    total_possible_value = sum(values) + total_bonus
     if parameters["penalty"] <= total_possible_value:
         add_warning(
             result,
@@ -198,7 +215,7 @@ def validate(problem: dict) -> dict:
         {
             "item_weight_statistics": finite_statistics(weights),
             "item_value_statistics": finite_statistics(values),
-            "quadratic_bonus_statistics": finite_statistics(bonus for _, _, bonus in bonuses),
+            "quadratic_bonus_statistics": array_statistics(block for _, _, block in quadratic_blocks(bonus_mapping)),
             "quadratic_bonus_density": len(bonuses) / possible_pairs if possible_pairs else 0.0,
             "capacity": capacity,
             "capacity_fraction_of_total_weight": capacity / sum(weights) if weights else None,
@@ -213,10 +230,7 @@ def validate(problem: dict) -> dict:
         item_sample = sample[:num_items]
         slack_sample = sample[num_items:]
         objective = sum(value * item_sample[index] for index, value in enumerate(values))
-        objective += sum(
-            bonus * item_sample[first] * item_sample[second]
-            for first, second, bonus in bonuses
-        )
+        objective += qubo_energy(bonus_mapping, item_sample)
         residual = sum(weight * item_sample[index] for index, weight in enumerate(weights))
         residual += sum(weight * bit for weight, bit in zip(slack, slack_sample))
         residual -= capacity

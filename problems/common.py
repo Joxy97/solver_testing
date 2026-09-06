@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from pathlib import Path
+import tempfile
 from typing import Iterable
 
 import networkx as nx
 import numpy as np
+
+from .storage import (
+    BLOCK, HEADER, PACKED, TOLERANCE, MappedQubo, TermAccumulator,
+    _header, linear_values, pair_start, quadratic_blocks, write_sorted,
+)
 
 
 QUBO_CONVENTION = (
@@ -15,19 +21,32 @@ QUBO_CONVENTION = (
 )
 
 
-@dataclass
 class QuboBuilder:
-    """Accumulates sparse QUBO coefficients without matrix-convention ambiguity."""
+    """Accumulate coefficients on disk, using bounded buffers for sparse terms."""
 
-    num_variables: int
-    variable_names: list[str]
-    linear: dict[int, float] = field(default_factory=dict)
-    quadratic: dict[tuple[int, int], float] = field(default_factory=dict)
-    offset: float = 0.0
+    def __init__(self, num_variables, variable_names, *, packed=False):
+        self.num_variables, self.variable_names = num_variables, variable_names
+        self.offset = 0.0
+        self._temporary = tempfile.TemporaryDirectory(prefix="qubo-build-")
+        self.path = Path(self._temporary.name) / "data.qubo"
+        self.packed = packed
+        self.quadratic = None
+        self.linear = None
+        if packed:
+            pairs = num_variables * (num_variables - 1) // 2
+            with self.path.open("wb") as handle:
+                handle.truncate(HEADER.size + 8 * (num_variables + pairs))
+            self.linear = np.memmap(self.path, mode="r+", dtype="<f8", offset=HEADER.size, shape=(num_variables,))
+            self.quadratic = (np.memmap(self.path, mode="r+", dtype="<f8", offset=HEADER.size + 8 * num_variables,
+                                        shape=(pairs,)) if pairs else np.empty(0, dtype="<f8"))
+        else:
+            self.linear = np.lib.format.open_memmap(Path(self._temporary.name) / "linear.npy",
+                                                    mode="w+", dtype="<f8", shape=(num_variables,))
+            self.quadratic = TermAccumulator()
 
     def add_linear(self, variable: int, coefficient: float) -> None:
         self._check_variable(variable)
-        self.linear[variable] = self.linear.get(variable, 0.0) + float(coefficient)
+        self.linear[variable] += float(coefficient)
 
     def add_quadratic(self, first: int, second: int, coefficient: float) -> None:
         self._check_variable(first)
@@ -35,8 +54,11 @@ class QuboBuilder:
         if first == second:
             self.add_linear(first, coefficient)
             return
-        pair = tuple(sorted((first, second)))
-        self.quadratic[pair] = self.quadratic.get(pair, 0.0) + float(coefficient)
+        first, second = min(first, second), max(first, second)
+        if self.packed:
+            self.quadratic[pair_start(self.num_variables, first) + second - first - 1] += float(coefficient)
+        else:
+            self.quadratic.add(first, second, float(coefficient))
 
     def add_offset(self, value: float) -> None:
         self.offset += float(value)
@@ -56,7 +78,17 @@ class QuboBuilder:
                 weight * (coefficient * coefficient + 2.0 * constant * coefficient),
             )
         for position, (first, first_coefficient) in enumerate(items):
-            for second, second_coefficient in items[position + 1 :]:
+            if self.packed:
+                for start in range(position + 1, len(items), BLOCK):
+                    block = items[start : start + BLOCK]
+                    seconds = np.fromiter((item[0] for item in block), dtype=np.int64)
+                    values = np.fromiter((item[1] for item in block), dtype=np.float64)
+                    rows, columns = np.minimum(first, seconds), np.maximum(first, seconds)
+                    positions = rows * (2 * self.num_variables - rows - 1) // 2 + columns - rows - 1
+                    self.quadratic[positions] += weight * 2.0 * first_coefficient * values
+                continue
+            for next_position in range(position + 1, len(items)):
+                second, second_coefficient = items[next_position]
                 self.add_quadratic(
                     first,
                     second,
@@ -88,24 +120,46 @@ class QuboBuilder:
                         weight * first_coefficient * second_coefficient,
                     )
 
-    def build(self) -> dict:
-        tolerance = 1e-12
-        return {
-            "num_variables": self.num_variables,
-            "variable_names": self.variable_names,
-            "linear": [
-                [index, coefficient]
-                for index, coefficient in sorted(self.linear.items())
-                if abs(coefficient) > tolerance
-            ],
-            "quadratic": [
-                [first, second, coefficient]
-                for (first, second), coefficient in sorted(self.quadratic.items())
-                if abs(coefficient) > tolerance
-            ],
-            "offset": self.offset,
-            "convention": QUBO_CONVENTION,
-        }
+    def build(self, sorted_terms=None) -> dict:
+        for start in range(0, self.num_variables, BLOCK):
+            block = self.linear[start : start + BLOCK]
+            block[np.abs(block) <= TOLERANCE] = 0
+        if self.packed:
+            count = linear_count = 0
+            for array in (self.linear, self.quadratic):
+                nonzero = 0
+                for start in range(0, len(array), BLOCK):
+                    block = array[start : start + BLOCK]
+                    block[np.abs(block) <= TOLERANCE] = 0
+                    nonzero += int(np.count_nonzero(block))
+                if array is self.linear:
+                    linear_count = nonzero
+                else:
+                    count = nonzero
+            with self.path.open("r+b") as handle:
+                handle.write(_header(self.num_variables, count, linear_count, self.offset, PACKED))
+        else:
+            terms = self.quadratic.terms() if sorted_terms is None else sorted_terms
+            write_sorted(self.path, self.num_variables, self.linear, terms, self.offset)
+        self._close_arrays()
+        result = MappedQubo(self.path, temporary=self._temporary)
+        self._temporary = None
+        result["variable_names"] = self.variable_names
+        return result
+
+    def _close_arrays(self):
+        for value in (self.linear, self.quadratic):
+            if isinstance(value, np.memmap):
+                value.flush()
+                value._mmap.close()
+            elif isinstance(value, TermAccumulator):
+                value.close()
+        self.linear = self.quadratic = None
+
+    def __del__(self):
+        self._close_arrays()
+        if self._temporary is not None:
+            self._temporary.cleanup()
 
     def _check_variable(self, variable: int) -> None:
         if not 0 <= variable < self.num_variables:
@@ -114,18 +168,18 @@ class QuboBuilder:
 
 def qubo_energy(qubo: dict, sample: Iterable[int]) -> float:
     """Evaluate a binary sample using the project's saved QUBO convention."""
-    values = list(sample)
+    values = np.asarray(sample) if isinstance(sample, (list, tuple, np.ndarray)) else np.fromiter(sample, dtype=np.float64)
     expected = qubo["num_variables"]
     if len(values) != expected:
         raise ValueError(f"Expected {expected} binary values, received {len(values)}")
-    if any(value not in (0, 1) for value in values):
+    if np.any((values != 0) & (values != 1)):
         raise ValueError("QUBO samples must contain only 0 and 1")
     energy = float(qubo.get("offset", 0.0))
-    energy += sum(coefficient * values[index] for index, coefficient in qubo["linear"])
-    energy += sum(
-        coefficient * values[first] * values[second]
-        for first, second, coefficient in qubo["quadratic"]
-    )
+    linear = linear_values(qubo)
+    for start in range(0, expected, BLOCK):
+        energy += float(np.dot(linear[start : start + BLOCK], values[start : start + BLOCK]))
+    for first, second, coefficients in quadratic_blocks(qubo):
+        energy += float(np.dot(coefficients, values[first] * values[second]))
     return float(energy)
 
 
@@ -235,4 +289,3 @@ def slack_weights(maximum_value: int) -> list[int]:
         represented += weight
         power *= 2
     return weights
-

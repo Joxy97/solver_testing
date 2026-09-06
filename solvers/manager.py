@@ -75,11 +75,7 @@ def solve_problem(
     tolerance = 1e-5 * max(1.0, abs(recomputed), abs(reported))
     if not math.isfinite(recomputed) or not math.isfinite(reported):
         raise RuntimeError(f"{module.NAME} returned a non-finite objective value")
-    if difference > tolerance:
-        raise RuntimeError(
-            f"{module.NAME} reported energy {reported}, but independent QUBO evaluation "
-            f"gave {recomputed} (difference {difference})."
-        )
+    energy_check_passed = difference <= tolerance
 
     snapshots = _normalize_snapshots(
         backend.get("snapshots", []),
@@ -139,7 +135,7 @@ def solve_problem(
             "reported_energy": reported,
             "recomputed_energy": recomputed,
             "absolute_energy_difference": difference,
-            "passed": True,
+            "passed": energy_check_passed,
         },
         "snapshots": snapshots,
         "solver_metrics": backend.get("metrics", {}),
@@ -191,6 +187,10 @@ def _update_manifest(result: dict, result_path: Path, root: Path) -> None:
         "device": result["solver"]["device"],
         "status": result["status"],
         "energy": result["solution"]["energy"],
+        "reported_energy": result["verification"]["reported_energy"],
+        "recomputed_energy": result["verification"]["recomputed_energy"],
+        "absolute_energy_difference": result["verification"]["absolute_energy_difference"],
+        "energy_check_passed": result["verification"]["passed"],
         "wall_seconds": result["timing"]["wall_seconds"],
         "snapshots": len(result.get("snapshots", [])),
         "file": str(relative_path),
@@ -301,10 +301,9 @@ def _normalize_snapshots(snapshots, qubo: dict, expected_count: int) -> list[dic
             reported = float(reported_energy)
             difference = abs(recomputed - reported)
             tolerance = 1e-5 * max(1.0, abs(recomputed), abs(reported))
-            if not math.isfinite(reported) or difference > tolerance:
+            if not math.isfinite(recomputed) or not math.isfinite(reported):
                 raise RuntimeError(
-                    f"Snapshot {expected_index} reported energy {reported}, but independent "
-                    f"QUBO evaluation gave {recomputed}"
+                    f"Snapshot {expected_index} returned a non-finite objective value"
                 )
             output["solution"] = {"sample": values, "energy": recomputed}
             output["verification"] = {
@@ -312,7 +311,7 @@ def _normalize_snapshots(snapshots, qubo: dict, expected_count: int) -> list[dic
                 "reported_energy": reported,
                 "recomputed_energy": recomputed,
                 "absolute_energy_difference": difference,
-                "passed": True,
+                "passed": difference <= tolerance,
             }
         elif reported_energy is not None:
             raise RuntimeError("A snapshot without a sample cannot report an energy")

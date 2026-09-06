@@ -38,7 +38,7 @@ def generate(parameters: dict, seed: int) -> dict:
         parameters["max_value"],
     )
     names = [f"number_{index}" for index in range(len(numbers))]
-    builder = QuboBuilder(len(numbers), names)
+    builder = QuboBuilder(len(numbers), names, packed=True)
     total = sum(numbers)
     builder.add_square(
         {index: 2.0 * value for index, value in enumerate(numbers)},

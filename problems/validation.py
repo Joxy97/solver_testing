@@ -15,6 +15,7 @@ import networkx as nx
 import numpy as np
 
 from .common import qubo_energy
+from .storage import BLOCK, LinearTerms, QuadraticTerms, coefficient_blocks, linear_values, quadratic_blocks
 
 
 VALIDATOR_VERSION = 1
@@ -105,15 +106,13 @@ def check_encoding(
     else:
         rng_seed = (int(problem.get("seed", 0)) + 0x51A7E) % (2**64)
         rng = np.random.default_rng(rng_seed)
-        samples = [
-            [0] * num_variables,
-            [1] * num_variables,
-            [index % 2 for index in range(num_variables)],
-        ]
-        samples.extend(
-            [int(value) for value in row]
-            for row in rng.integers(0, 2, size=(random_samples, num_variables))
-        )
+        def sample_stream():
+            yield [0] * num_variables
+            yield [1] * num_variables
+            yield [index % 2 for index in range(num_variables)]
+            for _ in range(random_samples):
+                yield rng.integers(0, 2, size=num_variables).tolist()
+        samples = sample_stream()
         method = "deterministic_random"
         intended_count = random_samples + 3
 
@@ -225,16 +224,32 @@ def check_graph(num_vertices: int, edges: list, parameters: dict) -> tuple[dict,
 
 
 def finite_statistics(values: Iterable[float]) -> dict:
-    values = [float(value) for value in values]
-    if not values:
+    iterator = iter(values)
+    def blocks():
+        while True:
+            block = np.fromiter(itertools.islice(iterator, BLOCK), dtype=np.float64)
+            if not len(block):
+                return
+            yield block
+    return array_statistics(blocks())
+
+
+def array_statistics(blocks) -> dict:
+    count, mean, m2 = 0, 0.0, 0.0
+    minimum, maximum = math.inf, -math.inf
+    for block in blocks:
+        if not len(block):
+            continue
+        block_mean = float(np.mean(block))
+        delta = block_mean - mean
+        total = count + len(block)
+        m2 += float(np.sum((block - block_mean) ** 2)) + delta * delta * count * len(block) / total
+        mean += delta * len(block) / total
+        count = total
+        minimum, maximum = min(minimum, float(np.min(block))), max(maximum, float(np.max(block)))
+    if not count:
         return {"count": 0, "min": None, "max": None, "mean": None, "std": None}
-    return {
-        "count": len(values),
-        "min": min(values),
-        "max": max(values),
-        "mean": float(np.mean(values)),
-        "std": float(np.std(values)),
-    }
+    return {"count": int(count), "min": minimum, "max": maximum, "mean": mean, "std": math.sqrt(m2 / count)}
 
 
 def is_k_colorable(graph: nx.Graph, num_colors: int) -> bool:
@@ -265,6 +280,9 @@ def _validate_qubo(qubo: dict | None) -> dict:
     if not isinstance(qubo, dict):
         add_error(result, "missing_qubo", "Problem does not contain a QUBO mapping.")
         return result
+
+    if isinstance(qubo.get("linear"), LinearTerms) and isinstance(qubo.get("quadratic"), QuadraticTerms):
+        return _validate_array_qubo(qubo)
 
     required = {"num_variables", "variable_names", "linear", "quadratic", "offset"}
     missing = sorted(required.difference(qubo))
@@ -346,3 +364,44 @@ def _validate_qubo(qubo: dict | None) -> dict:
 
 def _finite_number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _validate_array_qubo(qubo):
+    result = validation_result()
+    n = qubo["num_variables"]
+    active = np.zeros(n, dtype=bool)
+    linear = linear_values(qubo)
+    linear_count = count = 0
+    previous = (-1, -1)
+    invalid = nonfinite = False
+    for start in range(0, n, BLOCK):
+        block = linear[start : start + BLOCK]
+        active[start : start + len(block)] = block != 0
+        linear_count += int(np.count_nonzero(block))
+        nonfinite |= not np.all(np.isfinite(block))
+    for first, second, values in quadratic_blocks(qubo):
+        valid = (first >= 0) & (first < second) & (second < n)
+        ordered = (first[1:] > first[:-1]) | ((first[1:] == first[:-1]) & (second[1:] > second[:-1]))
+        if not np.all(valid) or not np.all(ordered) or (int(first[0]), int(second[0])) <= previous:
+            invalid = True
+        previous = (int(first[-1]), int(second[-1]))
+        active[first[valid]] = True
+        active[second[valid]] = True
+        count += len(values)
+        nonfinite |= not np.all(np.isfinite(values))
+    if invalid:
+        add_error(result, "invalid_quadratic_indices", "QUBO pairs must be unique, sorted, and satisfy 0 <= i < j < n.")
+    if count != len(qubo["quadratic"]) or linear_count != len(qubo["linear"]):
+        add_error(result, "invalid_term_count", "QUBO header term counts do not match the coefficients.")
+    if nonfinite:
+        add_error(result, "nonfinite_coefficient", "QUBO coefficients must be finite.")
+    if not _finite_number(qubo["offset"]):
+        add_error(result, "nonfinite_offset", "QUBO offset must be finite.")
+    possible = n * (n - 1) // 2
+    result["characteristics"].update(
+        qubo_variables=n, qubo_linear_terms=linear_count, qubo_quadratic_terms=count,
+        qubo_quadratic_density=count / possible if possible else 0.0,
+        qubo_inactive_variables=n - int(np.count_nonzero(active)),
+        qubo_coefficient_statistics=array_statistics(coefficient_blocks(qubo)),
+    )
+    return result

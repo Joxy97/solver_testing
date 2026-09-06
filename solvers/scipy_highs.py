@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 import numpy as np
+from problems.storage import linear_values, quadratic_blocks, quadratic_arrays
 
 from .common import (
     SolverCapabilityError,
@@ -101,10 +102,11 @@ def solve(qubo: dict, parameters: dict) -> dict:
         )
 
     objective = np.zeros(total_variables, dtype=np.float64)
-    for variable, coefficient in qubo["linear"]:
-        objective[int(variable)] += float(coefficient)
-    for product, (_, _, coefficient) in enumerate(quadratic_terms):
-        objective[num_variables + product] = float(coefficient)
+    objective[:num_variables] = linear_values(qubo)
+    cursor = num_variables
+    for _, _, coefficients in quadratic_blocks(qubo):
+        objective[cursor : cursor + len(coefficients)] = coefficients
+        cursor += len(coefficients)
 
     matrix = None
     row_lower = np.empty(0, dtype=np.float64)
@@ -112,8 +114,7 @@ def solve(qubo: dict, parameters: dict) -> dict:
 
     if num_products:
         products = np.arange(num_products, dtype=np.int64)
-        first = np.asarray([term[0] for term in quadratic_terms], dtype=np.int64)
-        second = np.asarray([term[1] for term in quadratic_terms], dtype=np.int64)
+        first, second, _ = quadratic_arrays(qubo)
         auxiliary = num_variables + products
 
         # y <= x_i, y <= x_j, and y >= x_i + x_j - 1 force y = x_i*x_j.

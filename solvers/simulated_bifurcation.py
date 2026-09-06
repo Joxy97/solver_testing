@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 import numpy as np
+from problems.storage import linear_values, quadratic_blocks
 
 from .common import (
     SolverCapabilityError,
@@ -139,20 +140,16 @@ def solve(qubo: dict, parameters: dict) -> dict:
             "cannot access a CUDA GPU. Use device=cpu or install a CUDA-enabled PyTorch build."
         )
 
-    numpy_dtype = np.float32 if parameters["dtype"] == "float32" else np.float64
     torch_dtype = torch.float32 if parameters["dtype"] == "float32" else torch.float64
-    matrix = np.zeros((num_variables, num_variables), dtype=numpy_dtype)
-    linear = np.zeros(num_variables, dtype=numpy_dtype)
-    for variable, coefficient in qubo["linear"]:
-        linear[int(variable)] += float(coefficient)
-    for first, second, coefficient in qubo["quadratic"]:
-        # A symmetric half-coefficient representation gives x.T @ matrix @ x = q*x_i*x_j.
-        half = float(coefficient) / 2.0
-        matrix[int(first), int(second)] += half
-        matrix[int(second), int(first)] += half
-
-    matrix_tensor = torch.as_tensor(matrix, dtype=torch_dtype, device=device)
-    linear_tensor = torch.as_tensor(linear, dtype=torch_dtype, device=device)
+    matrix_tensor = torch.zeros((num_variables, num_variables), dtype=torch_dtype, device=device)
+    linear_tensor = torch.tensor(linear_values(qubo), dtype=torch_dtype, device=device)
+    for first, second, coefficients in quadratic_blocks(qubo):
+        # Fill the solver's required matrix directly, without a second CPU matrix.
+        rows = torch.tensor(first.astype(np.int64, copy=False), device=device)
+        columns = torch.tensor(second.astype(np.int64, copy=False), device=device)
+        half = torch.tensor(coefficients * 0.5, dtype=torch_dtype, device=device)
+        matrix_tensor.index_put_((rows, columns), half, accumulate=True)
+        matrix_tensor.index_put_((columns, rows), half, accumulate=True)
 
     num_snapshots = parameters["num_snapshots"]
     snapshot_targets = equally_spaced_targets(
@@ -224,7 +221,7 @@ def solve(qubo: dict, parameters: dict) -> dict:
         "metrics": {
             "torch_version": torch.__version__,
             "cuda_available": bool(torch.cuda.is_available()),
-            "dense_matrix_mib": matrix.nbytes / 1024**2,
+        "dense_matrix_mib": matrix_tensor.numel() * matrix_tensor.element_size() / 1024**2,
             "optimality_proven": False,
         },
         "snapshots": snapshots,

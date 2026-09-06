@@ -10,6 +10,7 @@ from pathlib import Path
 import yaml
 
 from problems.manager import (
+    close_problem,
     ProblemValidationError,
     describe_problem,
     generate_problem,
@@ -91,6 +92,7 @@ def _save_generated(
             )
             break
         except ProblemValidationError as error:
+            close_problem(error.problem)
             last_error = error
             if attempt + 1 < max_attempts:
                 print(
@@ -99,17 +101,20 @@ def _save_generated(
                 )
     if problem is None:
         raise last_error
-    path = save_problem(problem, output / f"seed_{problem['seed']}.json")
-    qubo = problem["qubo"]
-    terms = len(qubo["linear"]) + len(qubo["quadratic"])
-    print()
-    print(
-        f"Saved {problem['instance_id']}: "
-        f"{qubo['num_variables']} variables, {terms} nonzero terms -> {path}"
-    )
-    warning_codes = [issue["code"] for issue in problem["validation"]["warnings"]]
-    if warning_codes:
-        print(f"  Validation warnings: {', '.join(warning_codes)}")
+    try:
+        path = save_problem(problem, output / f"seed_{problem['seed']}.qubo")
+        qubo = problem["qubo"]
+        terms = len(qubo["linear"]) + len(qubo["quadratic"])
+        print()
+        print(
+            f"Saved {problem['instance_id']}: "
+            f"{qubo['num_variables']} variables, {terms} nonzero terms -> {path}"
+        )
+        warning_codes = [issue["code"] for issue in problem["validation"]["warnings"]]
+        if warning_codes:
+            print(f"  Validation warnings: {', '.join(warning_codes)}")
+    finally:
+        close_problem(problem)
     if owned_tracker:
         owned_tracker.finish()
     return path
@@ -301,7 +306,7 @@ def _guided_mode() -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate reproducible QUBO problem instances and save them as JSON."
+        description="Generate reproducible QUBO instances and save memory-mapped binary .qubo files."
     )
     parser.add_argument("config", nargs="?", type=Path, help="YAML configuration file")
     parser.add_argument("--list", action="store_true", help="List available problems")

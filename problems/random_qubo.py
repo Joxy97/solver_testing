@@ -6,6 +6,7 @@ import math
 import numpy as np
 
 from .common import QuboBuilder
+from .storage import coefficient_blocks, linear_values, quadratic_blocks
 
 
 NAME = "Random QUBO"
@@ -136,22 +137,26 @@ def generate(parameters: dict, seed: int, progress=None) -> dict:
         if progress and variable + 1 >= next_report:
             progress(variable + 1, total_work, "linear terms")
             next_report += report_every
-    for first, second in _sample_quadratic_pairs(
-        num_variables, parameters["quadratic_density"], rng
-    ):
-        builder.add_quadratic(first, second, _coefficient(parameters, rng))
-        if progress:
-            scanned = _pair_prefix(num_variables, first) + (second - first)
-            completed = num_variables + scanned
-            if completed >= next_report:
-                progress(completed, total_work, "quadratic terms")
-                next_report = completed + report_every
+    def terms():
+        nonlocal next_report
+        for first, second in _sample_quadratic_pairs(
+            num_variables, parameters["quadratic_density"], rng
+        ):
+            yield first, second, _coefficient(parameters, rng)
+            if progress:
+                scanned = _pair_prefix(num_variables, first) + (second - first)
+                completed = num_variables + scanned
+                if completed >= next_report:
+                    progress(completed, total_work, "quadratic terms")
+                    next_report = completed + report_every
+
+    qubo = builder.build(terms())
 
     if progress:
         progress(max(0, total_work - 1), total_work, "validating")
 
     return {
-        "qubo": builder.build(),
+        "qubo": qubo,
         "problem_data": {
             "description": "No domain data; coefficients are generated directly."
         },
@@ -163,42 +168,38 @@ def generate(parameters: dict, seed: int, progress=None) -> dict:
 
 
 def validate(problem: dict) -> dict:
-    from .validation import add_warning, finite_statistics, validation_result
+    from .validation import add_warning, array_statistics, validation_result
 
     result = validation_result()
     qubo = problem["qubo"]
     num_variables = qubo["num_variables"]
-    linear_by_variable = {index: coefficient for index, coefficient in qubo["linear"]}
     quadratic = qubo["quadratic"]
-    active_quadratic = set()
-    for first, second, _ in quadratic:
-        active_quadratic.update((first, second))
-    inactive = [
-        variable
-        for variable in range(num_variables)
-        if variable not in active_quadratic and variable not in linear_by_variable
-    ]
-    coefficients = [coefficient for _, coefficient in qubo["linear"]]
-    coefficients += [coefficient for _, _, coefficient in quadratic]
-    positive = sum(coefficient > 0 for coefficient in coefficients)
-    negative = sum(coefficient < 0 for coefficient in coefficients)
-    zero = sum(coefficient == 0 for coefficient in coefficients)
+    active = linear_values(qubo) != 0
+    for first, second, _ in quadratic_blocks(qubo):
+        active[first] = active[second] = True
+    inactive = num_variables - int(np.count_nonzero(active))
+    positive = negative = zero = count = 0
+    for block in coefficient_blocks(qubo):
+        positive += int(np.count_nonzero(block > 0))
+        negative += int(np.count_nonzero(block < 0))
+        zero += int(np.count_nonzero(block == 0))
+        count += len(block)
     if not quadratic and num_variables > 1:
         add_warning(result, "no_quadratic_interactions", "Random QUBO contains no quadratic interactions.")
     if inactive:
-        add_warning(result, "inactive_random_variables", f"Random QUBO has {len(inactive)} inactive variables.")
-    if coefficients and (positive == 0 or negative == 0):
+        add_warning(result, "inactive_random_variables", f"Random QUBO has {inactive} inactive variables.")
+    if count and (positive == 0 or negative == 0):
         add_warning(result, "one_sided_coefficients", "All nonzero QUBO coefficients have the same sign.")
     possible_pairs = num_variables * (num_variables - 1) // 2
     result["characteristics"].update(
         {
             "realized_quadratic_density": len(quadratic) / possible_pairs if possible_pairs else 0.0,
             "requested_quadratic_density": problem["parameters"]["quadratic_density"],
-            "positive_coefficient_fraction": positive / len(coefficients) if coefficients else None,
-            "negative_coefficient_fraction": negative / len(coefficients) if coefficients else None,
+            "positive_coefficient_fraction": positive / count if count else None,
+            "negative_coefficient_fraction": negative / count if count else None,
             "stored_zero_coefficients": zero,
-            "inactive_random_variables": len(inactive),
-            "random_coefficient_statistics": finite_statistics(coefficients),
+            "inactive_random_variables": inactive,
+            "random_coefficient_statistics": array_statistics(coefficient_blocks(qubo)),
             "encoding_check": {
                 "method": "direct_definition",
                 "samples_checked": 0,

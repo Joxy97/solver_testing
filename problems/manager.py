@@ -22,6 +22,7 @@ from . import (
     spin_glass,
 )
 from .validation import WARNING_CODES, validate_problem
+from .storage import MappedQubo, content_digest, save_qubo
 
 
 PROBLEMS = {
@@ -85,7 +86,7 @@ def generate_problem(
         generated = module.generate(normalized, int(seed))
     resolved_parameters = generated.pop("parameters", normalized)
     problem = {
-        "schema_version": 2,
+        "schema_version": 3,
         "problem_type": problem_type,
         "problem_name": module.NAME,
         "seed": int(seed),
@@ -114,31 +115,41 @@ def revalidate_problem(problem: dict) -> dict:
     """Re-run deterministic validation on a generated or loaded problem instance."""
     if "problem_type" not in problem:
         raise ValueError("Problem is missing problem_type")
+    if "problem_data" not in problem:
+        from .validation import _validate_qubo
+        result = _validate_qubo(problem["qubo"])
+        result["status"] = "failed" if result["errors"] else "passed"
+        result["has_warnings"] = bool(result["warnings"])
+        result["validator_version"] = 1
+        return result
     module = _module(problem["problem_type"])
     return validate_problem(problem, module.validate)
 
 
 def save_problem(problem: dict, destination: str | Path) -> Path:
-    problem["schema_version"] = 2
-    problem["validation"] = revalidate_problem(problem)
+    problem["schema_version"] = 3
+    if "validation" not in problem:
+        problem["validation"] = revalidate_problem(problem)
     if problem["validation"]["errors"]:
         raise ProblemValidationError(problem)
-    problem["instance_id"] = _instance_identifier(problem)
+    if "instance_id" not in problem:
+        problem["instance_id"] = _instance_identifier(problem)
     path = Path(destination)
-    if path.suffix.lower() != ".json":
-        path = path / f"{problem['instance_id']}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    with temporary.open("w", encoding="utf-8") as handle:
-        json.dump(problem, handle, indent=2, sort_keys=False)
-        handle.write("\n")
-    temporary.replace(path)
+    if path.suffix.lower() == ".json":
+        path = path.with_suffix(".qubo")
+    elif path.suffix.lower() != ".qubo":
+        path = path / f"{problem['instance_id']}.qubo"
+    save_qubo(problem["qubo"], path, problem_type=problem["problem_type"], instance_id=problem["instance_id"])
     _update_manifest(problem, path)
     return path
 
 
 def load_problem(source: str | Path) -> dict:
     path = Path(source)
+    if path.suffix.lower() == ".qubo":
+        qubo = MappedQubo(path)
+        return {"schema_version": 3, "problem_type": qubo.problem_type,
+                "instance_id": qubo.instance_id, "qubo": qubo}
     with path.open("r", encoding="utf-8") as handle:
         problem = json.load(handle)
     required = {"schema_version", "problem_type", "instance_id", "qubo", "problem_data"}
@@ -148,6 +159,15 @@ def load_problem(source: str | Path) -> dict:
     if problem.get("schema_version", 1) >= 2 and "validation" not in problem:
         raise ValueError("Not a valid schema-version-2 problem; missing validation metadata")
     return problem
+
+
+def close_problem(problem: dict) -> None:
+    """Release mapped input and generation scratch, including on failed runs."""
+    qubo = problem.get("qubo")
+    if isinstance(qubo, MappedQubo):
+        qubo.close()
+    for resource in problem.get("_resources", []):
+        resource.close()
 
 
 def _update_manifest(problem: dict, problem_path: Path) -> None:
@@ -195,12 +215,12 @@ def _update_manifest(problem: dict, problem_path: Path) -> None:
 
 def _manifest_row(problem: dict, problem_path: Path) -> dict:
     qubo = problem["qubo"]
-    validation = problem["validation"]
+    validation = problem.get("validation", {"status": "unknown", "warnings": [], "errors": [], "characteristics": {}})
     row = {
         "instance_id": problem["instance_id"],
         "problem_type": problem["problem_type"],
-        "problem_name": problem["problem_name"],
-        "seed": problem["seed"],
+        "problem_name": problem.get("problem_name", problem["problem_type"]),
+        "seed": problem.get("seed", ""),
         "file": problem_path.name,
         "num_variables": qubo["num_variables"],
         "linear_terms": len(qubo["linear"]),
@@ -209,7 +229,7 @@ def _manifest_row(problem: dict, problem_path: Path) -> dict:
         "warning_codes": ";".join(issue["code"] for issue in validation["warnings"]),
         "error_codes": ";".join(issue["code"] for issue in validation["errors"]),
     }
-    row.update(_flatten_for_manifest("parameter", problem["parameters"]))
+    row.update(_flatten_for_manifest("parameter", problem.get("parameters", {})))
     row.update(_flatten_for_manifest("stat", validation["characteristics"]))
     return row
 
@@ -236,7 +256,8 @@ def _module(problem_type: str):
 def _instance_identifier(problem: dict) -> str:
     if problem.get("problem_type") == "random_qubo":
         return f"seed_{int(problem['seed'])}"
-    content = {key: value for key, value in problem.items() if key != "instance_id"}
+    content = {"problem_type": problem["problem_type"], "seed": problem.get("seed"),
+               "parameters": problem.get("parameters", {}), "qubo": content_digest(problem["qubo"])}
     canonical = json.dumps(content, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return f"{problem['problem_type']}-{digest[:16]}"

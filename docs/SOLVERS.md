@@ -402,4 +402,8 @@ random_qubo_1000_0.01/
 Each JSON result records the problem ID and source, normalized parameters, package version,
 device, status, binary sample, independently recomputed energy, wall time, verification
 details, progress snapshots, and solver-specific metrics. `manifest.csv` provides one
-compact row per run and records the number of snapshots saved.
+compact row per run, including the solver-reported energy, independently recomputed energy,
+their absolute difference, whether the difference is within tolerance, and the number of
+snapshots saved. A finite reported-energy discrepancy is recorded but does not reject or
+skip an otherwise valid solution; the independently recomputed QUBO energy remains the
+canonical result energy.

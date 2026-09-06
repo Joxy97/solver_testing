@@ -1,6 +1,7 @@
 """D-Wave Ocean SDK simulated annealing adapter."""
 
 from __future__ import annotations
+from problems.storage import linear_values
 
 from .common import (
     SolverCapabilityError,
@@ -118,19 +119,10 @@ def solve(qubo: dict, parameters: dict) -> dict:
             f"above max_variable_updates={parameters['max_variable_updates']:,}. Reduce "
             "num_reads or num_sweeps, or deliberately raise the safety limit."
         )
-    linear = {variable: 0.0 for variable in range(num_variables)}
-    for variable, coefficient in qubo["linear"]:
-        linear[int(variable)] += float(coefficient)
-    quadratic = {
-        (int(first), int(second)): float(coefficient)
-        for first, second, coefficient in qubo["quadratic"]
-    }
-    bqm = dimod.BinaryQuadraticModel(
-        linear,
-        quadratic,
-        float(qubo.get("offset", 0.0)),
-        dimod.BINARY,
-    )
+    bqm = dimod.BinaryQuadraticModel(dimod.BINARY)
+    bqm.add_linear_from_array(linear_values(qubo))
+    bqm.add_quadratic_from(iter(qubo["quadratic"]))
+    bqm.offset = float(qubo.get("offset", 0.0))
 
     sampler = SimulatedAnnealingSampler()
     sample_kwargs = {

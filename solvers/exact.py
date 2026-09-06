@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 import numpy as np
+from problems.storage import linear_values, quadratic_blocks
 
 from .common import SolverCapabilityError, equally_spaced_targets, snapshot_record
 
@@ -57,17 +58,7 @@ def solve(qubo: dict, parameters: dict) -> dict:
             "62 variables."
         )
 
-    linear = np.zeros(num_variables, dtype=np.float64)
-    for variable, coefficient in qubo["linear"]:
-        linear[int(variable)] += float(coefficient)
-
-    if qubo["quadratic"]:
-        first = np.asarray([term[0] for term in qubo["quadratic"]], dtype=np.intp)
-        second = np.asarray([term[1] for term in qubo["quadratic"]], dtype=np.intp)
-        quadratic = np.asarray([term[2] for term in qubo["quadratic"]], dtype=np.float64)
-    else:
-        first = second = np.empty(0, dtype=np.intp)
-        quadratic = np.empty(0, dtype=np.float64)
+    linear = linear_values(qubo)
 
     total_states = 1 << num_variables
     snapshot_targets = equally_spaced_targets(
@@ -91,13 +82,9 @@ def solve(qubo: dict, parameters: dict) -> dict:
         energies = samples @ linear
 
         # Chunking prevents a dense QUBO from creating a very large B x m temporary.
-        for term_start in range(0, len(quadratic), 256):
-            term_stop = min(term_start + 256, len(quadratic))
-            products = (
-                samples[:, first[term_start:term_stop]]
-                * samples[:, second[term_start:term_stop]]
-            )
-            energies += products @ quadratic[term_start:term_stop]
+        for first, second, coefficients in quadratic_blocks(qubo, 256):
+            products = samples[:, first] * samples[:, second]
+            energies += products @ coefficients
 
         local_position = int(np.argmin(energies))
         local_energy = float(energies[local_position])

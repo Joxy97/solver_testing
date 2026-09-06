@@ -6,6 +6,7 @@ import math
 import time
 
 import numpy as np
+from problems.storage import BLOCK, QuadraticTerms, linear_values, quadratic_arrays, quadratic_blocks
 
 from problems.common import qubo_energy
 
@@ -285,13 +286,8 @@ def _wrap_angles(torch, theta):
 
 
 def _qubo_arrays(qubo: dict):
-    num_variables = int(qubo["num_variables"])
-    linear = np.zeros(num_variables, dtype=np.float64)
-    for variable, coefficient in qubo["linear"]:
-        linear[int(variable)] += float(coefficient)
-    first = np.asarray([term[0] for term in qubo["quadratic"]], dtype=np.int64)
-    second = np.asarray([term[1] for term in qubo["quadratic"]], dtype=np.int64)
-    values = np.asarray([term[2] for term in qubo["quadratic"]], dtype=np.float64)
+    linear = linear_values(qubo)
+    first, second, values = quadratic_arrays(qubo)
     return linear, first, second, values, float(qubo.get("offset", 0.0))
 
 
@@ -302,6 +298,58 @@ def _batch_qubo_energies(samples, linear, first, second, values, offset):
         stop = min(start + 8_192, len(values))
         products = samples[first[start:stop]] * samples[second[start:stop]]
         energies += values[start:stop] @ products
+    return energies
+
+
+def _mapped_ising_statistics(qubo):
+    h = linear_values(qubo, copy=True) * 0.5
+    constant = float(qubo["offset"]) + float(np.sum(h))
+    bounds = np.zeros(len(h), dtype=np.float64)
+    for first, second, values in quadratic_blocks(qubo):
+        coupling = values * 0.25
+        np.add.at(h, first, coupling)
+        np.add.at(h, second, coupling)
+        magnitude = np.abs(coupling)
+        np.add.at(bounds, first, magnitude)
+        np.add.at(bounds, second, magnitude)
+        constant += float(np.sum(coupling))
+    bounds += np.abs(h)
+    scale = float(bounds.max(initial=0.0)) or 1.0
+    return h, scale, constant
+
+
+def _mapped_ising_matrix(torch, qubo, scale, dtype, device, matrix_format):
+    n, count = qubo["num_variables"], len(qubo["quadratic"])
+    if matrix_format == "dense":
+        matrix = torch.zeros((n, n), dtype=dtype, device=device)
+    else:
+        indices = torch.empty((2, 2 * count), dtype=torch.int64, device=device)
+        data = torch.empty(2 * count, dtype=dtype, device=device)
+    cursor = 0
+    for first, second, values in quadratic_blocks(qubo):
+        rows = torch.tensor(first.astype(np.int64, copy=False), device=device)
+        columns = torch.tensor(second.astype(np.int64, copy=False), device=device)
+        coupling = torch.tensor(values * (0.25 / scale), dtype=dtype, device=device)
+        if matrix_format == "dense":
+            matrix[rows, columns] = coupling
+            matrix[columns, rows] = coupling
+        else:
+            end = cursor + len(values)
+            indices[0, cursor:end], indices[1, cursor:end] = rows, columns
+            indices[0, count + cursor : count + end], indices[1, count + cursor : count + end] = columns, rows
+            data[cursor:end] = coupling
+            data[count + cursor : count + end] = coupling
+            cursor = end
+    if matrix_format == "dense":
+        return matrix
+    return torch.sparse_coo_tensor(indices, data, (n, n), dtype=dtype, device=device).coalesce()
+
+
+def _mapped_batch_energies(qubo, samples, linear):
+    energies = float(qubo["offset"]) + linear @ samples
+    size = min(BLOCK, max(1, 1_048_576 // samples.shape[1]))
+    for first, second, values in quadratic_blocks(qubo, size):
+        energies += values @ (samples[first] * samples[second])
     return energies
 
 
@@ -336,12 +384,16 @@ def solve(qubo: dict, parameters: dict) -> dict:
     device = _resolve_device(torch, parameters["device"])
     torch_dtype = torch.float32 if parameters["dtype"] == "float32" else torch.float64
     element_bytes = 4 if parameters["dtype"] == "float32" else 8
-    h_numpy, first, second, edge_values, ising_constant = _qubo_to_ising(qubo)
-    scale = _interaction_scale(h_numpy, first, second, edge_values)
+    mapped = isinstance(qubo["quadratic"], QuadraticTerms)
+    if mapped:
+        h_numpy, scale, ising_constant = _mapped_ising_statistics(qubo)
+        directed_nonzeros = 2 * len(qubo["quadratic"])
+    else:
+        h_numpy, first, second, edge_values, ising_constant = _qubo_to_ising(qubo)
+        scale = _interaction_scale(h_numpy, first, second, edge_values)
+        edge_values /= scale
+        directed_nonzeros = 2 * len(edge_values)
     h_numpy /= scale
-    edge_values /= scale
-
-    directed_nonzeros = 2 * len(edge_values)
     density = directed_nonzeros / max(1, num_variables * num_variables)
     matrix_format = parameters["matrix_format"]
     if matrix_format == "auto":
@@ -354,18 +406,12 @@ def solve(qubo: dict, parameters: dict) -> dict:
             f"max_dense_variables={parameters['max_dense_variables']:,}. Use matrix_format=sparse."
         )
 
-    matrix = _build_matrix(
-        torch,
-        num_variables,
-        first,
-        second,
-        edge_values,
-        torch_dtype,
-        device,
-        matrix_format,
-    )
+    if mapped:
+        matrix = _mapped_ising_matrix(torch, qubo, scale, torch_dtype, device, matrix_format)
+    else:
+        matrix = _build_matrix(torch, num_variables, first, second, edge_values, torch_dtype, device, matrix_format)
     h = torch.as_tensor(h_numpy, dtype=torch_dtype, device=device)
-    qubo_linear, qubo_first, qubo_second, qubo_values, qubo_offset = _qubo_arrays(qubo)
+    qubo_linear = linear_values(qubo)
     agents = parameters["agents"]
     max_steps = parameters["max_steps"]
     snapshot_targets = equally_spaced_targets(max_steps, parameters["num_snapshots"])
@@ -392,9 +438,7 @@ def solve(qubo: dict, parameters: dict) -> dict:
         nonlocal best_energy, best_sample, best_step, candidate_batches
         x = torch.cos(theta)
         samples = (x >= 0.0).to(device="cpu", dtype=torch.uint8).numpy()
-        energies = _batch_qubo_energies(
-            samples, qubo_linear, qubo_first, qubo_second, qubo_values, qubo_offset
-        )
+        energies = _mapped_batch_energies(qubo, samples, qubo_linear)
         position = int(np.argmin(energies))
         energy = float(energies[position])
         candidate_batches += 1
