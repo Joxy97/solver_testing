@@ -15,8 +15,8 @@ solvers:
     devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
     replicas: 1           # set >1 for independent multi-start runs per QUBO
     parameters:
-      agents: 2
-      max_steps: 100
+      agents: 8
+      max_steps: 1000
       seed: 42
       early_stopping: false
       mode: ballistic
@@ -29,8 +29,8 @@ solvers:
     devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
     replicas: 1           # set >1 for independent multi-start runs per QUBO
     parameters:
-      agents: 2
-      max_steps: 100
+      agents: 8
+      max_steps: 1000
       seed: 42
       early_stopping: false
       mode: discrete
@@ -43,8 +43,8 @@ solvers:
     devices: [cuda:0]     # add devices to distribute QUBOs across a GPU pool
     replicas: 1           # set >1 for independent multi-start runs per QUBO
     parameters:
-      agents: 2
-      max_steps: 100
+      agents: 8
+      max_steps: 1000
       seed: 42
       num_snapshots: 100
       max_variables: 10000
