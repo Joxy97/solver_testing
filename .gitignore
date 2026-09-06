@@ -7,3 +7,4 @@ generated_problems/
 .next/
 dist/
 experiments/knapsack_experiment/
+experiments/density_test/

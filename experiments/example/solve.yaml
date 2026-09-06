@@ -35,8 +35,8 @@ solvers:
       early_stopping: false
       mode: discrete
       heated: true
-      num_snapshots: 100
       max_variables: 10000
+      num_snapshots: 100
 
   - type: transverse_route
     instance_name: TRF
@@ -46,5 +46,5 @@ solvers:
       agents: 8
       max_steps: 1000
       seed: 42
-      num_snapshots: 100
       max_variables: 10000
+      num_snapshots: 100

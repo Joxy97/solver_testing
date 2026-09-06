@@ -77,7 +77,8 @@ ordering, multi-GPU execution, replicas, and result retrieval.
 
 The dashboard reads one local batch at a time. It includes energy and runtime comparisons,
 a solver leaderboard, problem structure and coefficient charts, searchable result tables,
-and individual solution details. Files stay in the browser session.
+individual solution details, and checkpoint-energy graphs for every solved QUBO that saved
+progress snapshots. Files stay in the browser session.
 
 ```bash
 cd dashboard

@@ -1,34 +1,44 @@
-# Edit these values to define your Quadratic Knapsack experiment.
+# Edit these values to define your Random QUBO experiment.
 output_folder: ./
 base_seed: 42
 
 problems:
-  - type: quadratic_knapsack
-    count: 8
-    batch_name: QK_100
+  - type: random_qubo
+    count: 20
+    batch_name: RQ_1
     parameters:
-      num_items: 100
+      num_variables: 1000
+      quadratic_density: 0.01
+      distribution: uniform
+  
+  - type: random_qubo
+    count: 20
+    batch_name: RQ_10
+    parameters:
+      num_variables: 1000
+      quadratic_density: 0.1
+      distribution: uniform
 
-  - type: quadratic_knapsack
-    count: 8
-    batch_name: QK_500
+  - type: random_qubo
+    count: 20
+    batch_name: RQ_50
     parameters:
-      num_items: 500
+      num_variables: 1000
+      quadratic_density: 0.5
+      distribution: uniform
 
-  - type: quadratic_knapsack
-    count: 8
-    batch_name: QK_1000
+  - type: random_qubo
+    count: 20
+    batch_name: RQ_90
     parameters:
-      num_items: 1000
+      num_variables: 1000
+      quadratic_density: 0.9
+      distribution: uniform
 
-  - type: quadratic_knapsack
-    count: 8
-    batch_name: QK_5000
+  - type: random_qubo
+    count: 20
+    batch_name: RQ_100
     parameters:
-      num_items: 5000
-
-  - type: quadratic_knapsack
-    count: 8
-    batch_name: QK_10000
-    parameters:
-      num_items: 10000
+      num_variables: 1000
+      quadratic_density: 1
+      distribution: uniform

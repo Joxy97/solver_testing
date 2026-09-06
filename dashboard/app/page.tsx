@@ -72,6 +72,14 @@ type ResultDetail = {
     version?: string;
   };
   verification?: { passed?: boolean };
+  snapshots?: {
+    index?: number;
+    progress_fraction?: number;
+    target?: { unit?: string; value?: number; total?: number };
+    elapsed_seconds?: number | null;
+    solution?: { energy?: number; sample?: number[] } | null;
+    verification?: { passed?: boolean };
+  }[];
 };
 
 const COLORS = [
@@ -436,6 +444,27 @@ export default function Home() {
 
   const selectedProblemRow = batch?.qubos.find(
     (row) => row.instance_id === selectedProblem,
+  );
+  const snapshotData = useMemo(
+    () =>
+      (resultDetail?.snapshots || []).map((snapshot) => ({
+        checkpoint: snapshot.index,
+        progress: Number(snapshot.progress_fraction || 0) * 100,
+        energy:
+          snapshot.solution?.energy === undefined
+            ? null
+            : Number(snapshot.solution.energy),
+        elapsed:
+          snapshot.elapsed_seconds == null
+            ? null
+            : Number(snapshot.elapsed_seconds),
+        target: snapshot.target?.value,
+        unit: snapshot.target?.unit,
+      })),
+    [resultDetail],
+  );
+  const snapshotSolutions = snapshotData.filter(
+    (snapshot) => snapshot.energy !== null && Number.isFinite(snapshot.energy),
   );
   const ones =
     resultDetail?.solution?.sample?.filter((value: number) => value === 1)
@@ -989,6 +1018,7 @@ export default function Home() {
                           <TableHead>Device</TableHead>
                           <TableHead className="text-right">Energy</TableHead>
                           <TableHead className="text-right">Seconds</TableHead>
+                          <TableHead className="text-right">Snapshots</TableHead>
                           <TableHead>Status</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -1016,6 +1046,9 @@ export default function Home() {
                             </TableCell>
                             <TableCell className="text-right font-mono">
                               {formatNumber(numeric(row.wall_seconds))}
+                            </TableCell>
+                            <TableCell className="text-right font-mono">
+                              {formatNumber(numeric(row.snapshots), 0)}
                             </TableCell>
                             <TableCell>
                               <Badge
@@ -1067,6 +1100,82 @@ export default function Home() {
                             <p>Zeros</p>
                             <strong>{formatNumber(bits - ones, 0)}</strong>
                           </div>
+                        </div>
+                        <div>
+                          <div className="mb-3 flex items-end justify-between gap-4">
+                            <div>
+                              <h4 className="text-sm font-medium">
+                                Snapshot trajectory
+                              </h4>
+                              <p className="mt-1 text-xs text-slate-500">
+                                Verified incumbent energy over solver progress
+                              </p>
+                            </div>
+                            <Badge variant="outline">
+                              {snapshotSolutions.length}/{snapshotData.length}{' '}
+                              incumbents
+                            </Badge>
+                          </div>
+                          {snapshotData.length ? (
+                            <div className="h-64 rounded-lg border border-white/7 bg-black/15 p-2">
+                              <ResponsiveContainer width="100%" height="100%">
+                                <LineChart
+                                  data={snapshotData}
+                                  margin={{ top: 8, right: 12, bottom: 8, left: 8 }}
+                                >
+                                  <CartesianGrid
+                                    stroke="#ffffff0d"
+                                    vertical={false}
+                                  />
+                                  <XAxis
+                                    dataKey="progress"
+                                    type="number"
+                                    domain={[0, 100]}
+                                    tickFormatter={(value) => `${value}%`}
+                                    tick={{ fontSize: 10 }}
+                                    stroke="#64748b"
+                                  />
+                                  <YAxis
+                                    tickFormatter={(value) =>
+                                      formatNumber(Number(value), 1)
+                                    }
+                                    tick={{ fontSize: 10 }}
+                                    stroke="#64748b"
+                                    width={64}
+                                  />
+                                  <Tooltip
+                                    labelFormatter={(value) =>
+                                      `${formatNumber(Number(value), 1)}% progress`
+                                    }
+                                    formatter={(value, name) => [
+                                      value == null
+                                        ? 'No incumbent'
+                                        : formatNumber(Number(value)),
+                                      name === 'energy' ? 'Energy' : String(name),
+                                    ]}
+                                    contentStyle={{
+                                      background: '#111827',
+                                      border: '1px solid #ffffff18',
+                                      borderRadius: 10,
+                                    }}
+                                  />
+                                  <Line
+                                    type="monotone"
+                                    dataKey="energy"
+                                    stroke="#67e8f9"
+                                    strokeWidth={2}
+                                    dot={false}
+                                    activeDot={{ r: 4 }}
+                                    connectNulls={false}
+                                  />
+                                </LineChart>
+                              </ResponsiveContainer>
+                            </div>
+                          ) : (
+                            <div className="grid min-h-28 place-items-center rounded-lg border border-dashed border-white/10 bg-black/10 text-center text-sm text-slate-500">
+                              This solve did not record snapshots.
+                            </div>
+                          )}
                         </div>
                         <div>
                           <div className="mb-2 flex justify-between text-xs text-slate-400">
