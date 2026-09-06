@@ -1,0 +1,16 @@
+# Edit these values to define your Random QUBO experiment.
+output_folder: ./
+base_seed: 42
+
+problems:
+  - type: random_qubo
+    count: 8
+
+  - type: max_cut
+    count: 8
+
+  - type: maximum_clique
+    count: 8
+
+  - type: random_qubo
+    count: 10

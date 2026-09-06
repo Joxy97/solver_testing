@@ -134,11 +134,12 @@ def _expand_problem_files(patterns: list[str], config_path: Path) -> list[Path]:
 
 
 def _available_directory(path: Path) -> Path:
+    """Return path, or the first path_N sibling that does not already exist."""
     if not path.exists():
         return path
-    enumerator = 2
+    enumerator = 1
     while True:
-        candidate = path.with_name(f"{path.name}({enumerator})")
+        candidate = path.with_name(f"{path.name}_{enumerator}")
         if not candidate.exists():
             return candidate
         enumerator += 1

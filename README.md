@@ -38,8 +38,8 @@ Each experiment is self-contained: inputs go to `generated_problems/BATCH/qubos/
 solving creates the sibling `generated_problems/BATCH/results/` with one named solution
 JSON per problem-and-solver pair.
 The default batch format is `random_qubo_{variables}_{density}`. Existing runs are never
-overwritten: a colliding batch becomes `BATCH(2)`, then `BATCH(3)`, and so on. Repeated
-solves use `results(2)`, `results(3)`, and so on. Generated instance filenames use their
+overwritten: a colliding batch becomes `BATCH_1`, then `BATCH_2`, and so on. Repeated
+solves use `results_1`, `results_2`, and so on. Generated instance filenames use their
 seed, such as `seed_42.json`.
 
 Parallel execution is controlled directly in the solve YAML. A solver's `devices` list is
@@ -87,7 +87,7 @@ npm run dev
 
 Open the displayed local URL, choose `Load batch folder`, and select a folder such as
 `generated_problems/random_qubo_1000_0.01`. The folder must contain `qubos/` and may
-contain `results/`, `results(2)/`, and later result sets.
+contain `results/`, `results_1/`, and later result sets.
 
 ## Discover available options
 
