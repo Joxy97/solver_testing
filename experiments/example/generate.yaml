@@ -4,7 +4,7 @@ base_seed: 42
 
 problems:
   - type: random_qubo
-    count: 20
+    count: 16
     batch_name: RQ_1
     parameters:
       num_variables: 1000
@@ -12,7 +12,7 @@ problems:
       distribution: uniform
   
   - type: random_qubo
-    count: 20
+    count: 16
     batch_name: RQ_10
     parameters:
       num_variables: 1000
@@ -20,7 +20,7 @@ problems:
       distribution: uniform
 
   - type: random_qubo
-    count: 20
+    count: 16
     batch_name: RQ_50
     parameters:
       num_variables: 1000
@@ -28,7 +28,7 @@ problems:
       distribution: uniform
 
   - type: random_qubo
-    count: 20
+    count: 16
     batch_name: RQ_90
     parameters:
       num_variables: 1000
@@ -36,7 +36,7 @@ problems:
       distribution: uniform
 
   - type: random_qubo
-    count: 20
+    count: 16
     batch_name: RQ_100
     parameters:
       num_variables: 1000
